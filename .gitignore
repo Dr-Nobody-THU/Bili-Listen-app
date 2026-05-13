@@ -1,0 +1,15 @@
+build/
+state/
+.gradle/
+.gradle-user/
+.kotlin/
+tmp_verify/
+local.properties
+app/build/
+*.iml
+.idea/
+*.apk
+*.aab
+captures/
+externalNativeBuild/
+.cxx/
