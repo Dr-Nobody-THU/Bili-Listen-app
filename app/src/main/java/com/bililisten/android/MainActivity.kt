@@ -40,15 +40,35 @@ class MainActivity : ComponentActivity() {
                 onPlaybackSpeedChanged = viewModel::updatePlaybackSpeed,
                 onPlayModeChanged = viewModel::updatePlayMode,
                 onToggleFavorite = viewModel::toggleCurrentFavorite,
+                onToggleSpecialFavorite = viewModel::toggleCurrentSpecialFavorite,
                 onOpenFavorite = viewModel::openFavorite,
                 onOpenCreatorCollections = viewModel::loadCreatorCollectionsForCurrentAuthor,
                 onOpenCreatorCollection = viewModel::openCreatorCollection,
                 onCollectionPlaybackOrderChanged = viewModel::updateCollectionPlaybackOrder,
+                onSaveSpecialFavoriteOrder = viewModel::saveSpecialFavoriteOrder,
+                onAllowMobileStreamingChanged = viewModel::updateAllowMobileStreaming,
+                onRetryCache = viewModel::retryCache,
+                onFadePlaybackChanged = viewModel::updateFadePlayback,
+                onBackgroundAudioChanged = viewModel::updateBackgroundAudio,
+                onMusicLockScreenChanged = viewModel::updateMusicLockScreen,
+                onSkinChanged = viewModel::updateSkin,
+                onRecordCollectionSwitchChanged = viewModel::updateRecordCollectionSwitch,
+                onConfirmRecordCollection = viewModel::switchFavoriteFromRecord,
             )
         }
         if (savedInstanceState == null) {
             handleIntent(intent)
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        viewModel.onAppStarted()
+    }
+
+    override fun onStop() {
+        viewModel.onAppStopped(isChangingConfigurations)
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {

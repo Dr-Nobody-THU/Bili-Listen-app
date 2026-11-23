@@ -3,6 +3,7 @@ package com.bililisten.android.data
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
+import android.net.Network
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -11,6 +12,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.GZIPInputStream
 
 data class VideoReference(
     val bvid: String,
@@ -18,15 +20,17 @@ data class VideoReference(
 )
 
 data class ContentKey(
+    // Keep the persisted field name for existing records; pure audio uses a canonical au ID.
     val bvid: String,
     val cid: Long,
 ) {
     init {
-        require(BilibiliIds.isValidBvid(bvid)) { "Invalid BV id: $bvid" }
+        require(BilibiliIds.isValidBvid(bvid) || BilibiliIds.audioId(bvid) != null) { "Invalid content id: $bvid" }
         require(cid > 0L) { "cid must be > 0." }
     }
 
     fun asStoreKey(): String = "$bvid:$cid"
+    val audioId: Long? get() = BilibiliIds.audioId(bvid)
 }
 
 data class QueueItem(
@@ -140,9 +144,28 @@ enum class CollectionPlaybackOrder {
     COLLECTION_DEFAULT,
     PUBLISHED_ASC,
     PUBLISHED_DESC,
+    FAVORITED_ASC,
+    FAVORITED_DESC,
+    MANUAL;
+
+    val usesPublicationTime: Boolean get() = this == PUBLISHED_ASC || this == PUBLISHED_DESC
+
+    fun forCollection(collectionId: String?): CollectionPlaybackOrder = if (collectionId == SpecialFavorites.ID) {
+        when (this) {
+            COLLECTION_DEFAULT, PUBLISHED_ASC -> FAVORITED_ASC
+            PUBLISHED_DESC -> FAVORITED_DESC
+            else -> this
+        }
+    } else {
+        when (this) {
+            FAVORITED_ASC, FAVORITED_DESC, MANUAL -> COLLECTION_DEFAULT
+            else -> this
+        }
+    }
 }
 
 enum class AudioStreamKind {
+    AUDIO_TRACK,
     DASH_AUDIO,
     DASH_FLAC,
     DASH_DOLBY,
@@ -182,6 +205,7 @@ data class FavoriteCollection(
     val id: String,
     val playback: PlannedPlayback,
     val updatedAt: Long,
+    val listeningTimeMs: Long = 0L,
 ) {
     val title: String
         get() = playback.queue.collectionTitle ?: playback.plan.item.collectionTitle ?: playback.plan.item.title
@@ -201,11 +225,15 @@ data class AdvanceOutcome(
 
 object BilibiliIds {
     private val bvidPattern = Regex("BV[0-9A-Za-z]{10}")
+    private val audioIdPattern = Regex("au[1-9][0-9]*")
 
     fun isValidBvid(value: String?): Boolean = value != null && bvidPattern.matches(value)
+    fun audioId(value: String): Long? = value.takeIf { audioIdPattern.matches(it) }
+        ?.removePrefix("au")?.toLongOrNull()?.takeIf { it > 0 }
 }
 
 class BilibiliLinkParser {
+    private val audioPattern = Regex("(?<![A-Za-z0-9])au([1-9][0-9]*)(?![A-Za-z0-9])", RegexOption.IGNORE_CASE)
     private val bvidPattern = Regex("(BV[0-9A-Za-z]{10})")
     private val pagePattern = Regex("(^|[?&#])p=(\\d+)")
 
@@ -213,8 +241,12 @@ class BilibiliLinkParser {
         val raw = input.trim()
         require(raw.isNotEmpty()) { "Input must not be blank." }
 
+        audioPattern.find(raw)?.groupValues?.get(1)?.toLongOrNull()?.takeIf { it > 0 }?.let {
+            return VideoReference(bvid = "au$it")
+        }
+
         val bvid = bvidPattern.find(raw)?.groupValues?.get(1)
-            ?: throw IllegalArgumentException("Input does not contain a BV id: $input")
+            ?: throw IllegalArgumentException("请输入 BV 号、AU 号或 B 站视频／音频链接")
         val page = pagePattern.find(raw)?.groupValues?.get(2)?.toIntOrNull()?.coerceAtLeast(1) ?: 1
         return VideoReference(bvid = bvid, page = page)
     }
@@ -257,7 +289,7 @@ class BilibiliShortLinkResolver {
     }
 }
 
-class BilibiliApi {
+class BilibiliApi(private val jsonTransport: ((String, Network?) -> JSONObject)? = null) {
     companion object {
         private const val VIEW_API = "https://api.bilibili.com/x/web-interface/view?bvid="
         private const val PLAY_URL_API =
@@ -276,14 +308,27 @@ class BilibiliApi {
         return root.getJSONObject("data")
     }
 
-    fun fetchPlayUrl(bvid: String, cid: Long): JSONObject {
+    fun fetchPlayUrl(bvid: String, cid: Long, network: Network? = null): JSONObject {
         val url = PLAY_URL_API.format(Uri.encode(bvid), cid)
-        val root = getJson(url)
+        val root = getJson(url, network)
         val code = root.optLong("code", -1L)
         check(code == 0L) {
             "Bilibili playurl API failed: code=$code, message=${root.optString("message")}"
         }
         return root.getJSONObject("data")
+    }
+
+    fun fetchAudioInfo(id: Long): JSONObject = fetchAudioData("song/info?sid=$id")
+
+    fun fetchAudioUrl(id: Long, network: Network? = null): JSONObject =
+        fetchAudioData("url?sid=$id&privilege=2&quality=2", network)
+
+    private fun fetchAudioData(path: String, network: Network? = null): JSONObject {
+        val root = getJson("https://www.bilibili.com/audio/music-service-c/web/$path", network)
+        check(root.optInt("code", -1) == 0) {
+            "B 站音频暂不可用：${root.optString("message", root.optString("msg"))}（${root.optInt("code", -1)}）"
+        }
+        return root.optJSONObject("data") ?: error("B 站未返回音频信息")
     }
 
     fun fetchArchiveDescription(bvid: String): String? {
@@ -322,8 +367,30 @@ class BilibiliApi {
             ?: JSONObject()
     }
 
-    private fun getJson(url: String): JSONObject {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+    fun fetchSeasonPublicationTimes(authorMid: Long, seasonId: Long): Map<String, Long> {
+        val dates = mutableMapOf<String, Long>()
+        var page = 1
+        do {
+            val root = getJson("https://api.bilibili.com/x/polymer/web-space/seasons_archives_list?mid=$authorMid&season_id=$seasonId&sort_reverse=false&page_num=$page&page_size=100")
+            check(root.optInt("code", -1) == 0) { "无法获取合集发布时间：${root.optString("message")}" }
+            val data = root.getJSONObject("data")
+            val archives = (data.optJSONArray("archives") ?: JSONArray()).objects()
+            for (archive in archives) {
+                val bvid = archive.optStringOrNull("bvid") ?: continue
+                val time = archive.optLong("pubdate", 0L) * 1000L
+                if (time > 0) dates[bvid] = time
+            }
+            val total = data.optJSONObject("page")?.optInt("total", 0) ?: 0
+            if (archives.isEmpty() || page * 100 >= total) break
+            page++
+        } while (page <= 100)
+        return dates
+    }
+
+    private fun getJson(url: String, network: Network? = null): JSONObject {
+        jsonTransport?.let { return it(url, network) }
+        val target = URL(url)
+        val connection = ((network?.openConnection(target) ?: target.openConnection()) as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 20_000
@@ -339,7 +406,8 @@ class BilibiliApi {
             } else {
                 connection.errorStream ?: connection.inputStream
             }
-            val body = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
+            val decoded = if (connection.contentEncoding?.equals("gzip", ignoreCase = true) == true) GZIPInputStream(stream) else stream
+            val body = BufferedReader(InputStreamReader(decoded, Charsets.UTF_8)).use { reader ->
                 buildString {
                     var line = reader.readLine()
                     while (line != null) {
@@ -360,6 +428,7 @@ class BilibiliQueueResolver(
     private val api: BilibiliApi,
 ) {
     fun resolve(reference: VideoReference): ResolvedQueue {
+        BilibiliIds.audioId(reference.bvid)?.let { return AudioTrackData.queue(it, api.fetchAudioInfo(it)) }
         val data = api.fetchView(reference.bvid)
         val currentBvid = data.getString("bvid")
         val currentTitle = data.getString("title")
@@ -627,13 +696,10 @@ class BilibiliQueueResolver(
     ): VideoMetadataDraft {
         val stat = primary.optJSONObject("stat") ?: fallback?.optJSONObject("stat")
         val viewCount = stat?.optLong("view", stat.optLong("play", 0L)) ?: 0L
-        val publishSeconds = when {
-            primary.has("pubdate") -> primary.optLong("pubdate", 0L)
-            fallback?.has("pubdate") == true -> fallback.optLong("pubdate", 0L)
-            primary.has("ctime") -> primary.optLong("ctime", 0L)
-            fallback?.has("ctime") == true -> fallback.optLong("ctime", 0L)
-            else -> 0L
-        }
+        val publishSeconds = listOf(
+            primary.optLong("pubdate", 0L), fallback?.optLong("pubdate", 0L) ?: 0L,
+            primary.optLong("ctime", 0L), fallback?.optLong("ctime", 0L) ?: 0L,
+        ).firstOrNull { it > 0L } ?: 0L
         val description = explicitDescription
             ?: firstNonBlank(parseDescription(primary), parseDescription(fallback))
         return VideoMetadataDraft(
@@ -696,10 +762,11 @@ class BilibiliQueueResolver(
 class BilibiliAudioResolver(
     private val api: BilibiliApi,
 ) {
-    fun resolve(item: QueueItem): ResolvedAudio = resolve(item.key, item.title, item.durationMs)
+    fun resolve(item: QueueItem, network: Network? = null): ResolvedAudio = resolve(item.key, item.title, item.durationMs, network)
 
-    fun resolve(key: ContentKey, title: String, durationMs: Long): ResolvedAudio {
-        val data = api.fetchPlayUrl(key.bvid, key.cid)
+    fun resolve(key: ContentKey, title: String, durationMs: Long, network: Network? = null): ResolvedAudio {
+        key.audioId?.let { return AudioTrackData.audio(key, title, durationMs, api.fetchAudioUrl(it, network)) }
+        val data = api.fetchPlayUrl(key.bvid, key.cid, network)
         val candidates = mutableListOf<AudioStreamSource>()
         val dash = data.optJSONObject("dash")
         if (dash != null) {
@@ -783,6 +850,7 @@ class BilibiliAudioResolver(
     }
 
     private fun preferenceRank(kind: AudioStreamKind): Int = when (kind) {
+        AudioStreamKind.AUDIO_TRACK -> 4
         AudioStreamKind.DASH_AUDIO -> 3
         AudioStreamKind.DASH_FLAC -> 2
         AudioStreamKind.DASH_DOLBY -> 1
@@ -999,30 +1067,53 @@ class ListenStateStore(context: Context) {
     }
 }
 
-class ListenRepository(context: Context) {
+class ListenRepository(context: Context, private val api: BilibiliApi = BilibiliApi()) {
     private val parser = BilibiliLinkParser()
     private val shortLinkResolver = BilibiliShortLinkResolver()
-    private val api = BilibiliApi()
     private val queueResolver = BilibiliQueueResolver(api)
     private val audioResolver = BilibiliAudioResolver(api)
     private val audioCacheManager = AudioCacheManager(context.applicationContext, audioResolver)
     private val planner = PlaybackPlanner()
     private val stateStore = ListenStateStore(context.applicationContext)
+    private val recentProgress = RecentPlaybackStore(context.applicationContext, stateStore)
+    private val listeningTime = ListeningTimeStore(context.applicationContext)
+    private val specialFavorites = SpecialFavoritesStore(context.applicationContext)
+    private val resumeRetention = ResumeRetentionStore(context.applicationContext)
+
+    fun cleanupExpiredResumeRecords(now: Long = System.currentTimeMillis()): Set<String> =
+        resumeRetention.cleanup(now, specialFavorites.favorite())
+
+    fun cleanupExpiredAudioCache(now: Long = System.currentTimeMillis()): Int = synchronized(favoritesLock) {
+        audioCacheManager.updateFavorites(listFavorites(), now, cleanup = true)
+    }
+
+    private fun updateCacheFavorites(now: Long) { audioCacheManager.updateFavorites(listFavorites(), now) }
+
+    @Volatile var playbackError: String? = null
+    @Volatile var playbackLoading: Boolean = false
+    @Volatile var activePlayback: PlannedPlayback? = null
 
     companion object {
         private const val CREATOR_COLLECTIONS_PAGE_SIZE = 20
+        // Cleanup, membership changes and background progress writes must observe one ownership state.
+        private val favoritesLock = Any()
     }
 
     fun loadCollectionPlaybackOrder(collectionId: String?): CollectionPlaybackOrder {
         val normalizedCollectionId = collectionId?.takeIf { it.isNotBlank() }
             ?: return CollectionPlaybackOrder.COLLECTION_DEFAULT
-        return stateStore.loadCollectionPlaybackOrder(normalizedCollectionId)
+        return stateStore.loadCollectionPlaybackOrder(normalizedCollectionId).forCollection(normalizedCollectionId)
     }
 
     fun planPlayback(input: String, resumePolicy: ResumePolicy): PlannedPlayback {
         val reference = parseReference(input)
+        val resolved = queueResolver.resolve(reference)
+        val withDates = if (loadCollectionPlaybackOrder(resolved.collectionId).usesPublicationTime) {
+            runCatching { fillMissingPublicationTimes(PlannedPlayback(resolved, StartPlan(resolved.requestedIndex, resolved.items[resolved.requestedIndex], 0, "metadata"))).queue }
+                .getOrDefault(resolved)
+        } else resolved
         val queue = applySavedCollectionOrder(
-            queue = queueResolver.resolve(reference),
+            queue = withDates,
             anchorKey = null,
             fallbackIndex = null,
         )
@@ -1030,7 +1121,8 @@ class ListenRepository(context: Context) {
         val startPlan = StartPlan(
             startIndex = queue.requestedIndex,
             item = requestedItem,
-            startPositionMs = 0L,
+            startPositionMs = recentProgress.load(queue).firstOrNull { it.key == requestedItem.key }
+                ?.takeUnless { it.finished }?.positionMs ?: 0L,
             reason = when (resumePolicy) {
                 ResumePolicy.PREFER_REQUESTED_ITEM -> "requested item"
                 ResumePolicy.PREFER_SAVED_COLLECTION_POSITION -> "requested item"
@@ -1066,7 +1158,7 @@ class ListenRepository(context: Context) {
             ?: wrapIndex(targetIndex, orderedQueue.items.size)
         val item = orderedQueue.items[normalizedIndex]
         val startPositionMs = if (resumeSavedProgress) {
-            stateStore.loadProgress(item.key)
+            recentProgress.load(orderedQueue).firstOrNull { it.key == item.key }
                 ?.takeUnless { it.finished }
                 ?.positionMs
                 ?: 0L
@@ -1132,7 +1224,7 @@ class ListenRepository(context: Context) {
             queue = queuePlayback.queue,
             targetIndex = 0,
             reason = "creator collection",
-            resumeSavedProgress = false,
+            resumeSavedProgress = true,
         )
     }
 
@@ -1140,12 +1232,24 @@ class ListenRepository(context: Context) {
         playback: PlannedPlayback,
         preservePositionMs: Long = playback.plan.startPositionMs,
     ): PlannedPlayback {
+        if (playback.queue.collectionId == SpecialFavorites.ID) {
+            // This is a local playlist: resolving its BV as a collection would discard its membership.
+            return normalizePlaybackOrder(playback.copy(plan = playback.plan.copy(startPositionMs = preservePositionMs)))
+        }
+        // Saved queues and local audio must remain usable without contacting Bilibili.
+        if (!isWifiConnected()) return normalizePlaybackOrder(playback)
         val reference = VideoReference(
             bvid = playback.plan.item.key.bvid,
             page = playback.plan.item.pageNumber,
         )
+        val knownDates = playback.queue.items.filter { it.publishedAtMs > 0L }.associate { it.key.bvid to it.publishedAtMs }
+        val resolved = queueResolver.resolve(reference).let { queue ->
+            queue.copy(items = queue.items.map { item ->
+                if (item.publishedAtMs > 0) item else item.copy(publishedAtMs = knownDates[item.key.bvid] ?: 0L)
+            })
+        }
         val refreshedQueue = applySavedCollectionOrder(
-            queue = queueResolver.resolve(reference),
+            queue = resolved,
             anchorKey = playback.plan.item.key,
             fallbackIndex = null,
         )
@@ -1178,8 +1282,8 @@ class ListenRepository(context: Context) {
         order: CollectionPlaybackOrder,
         preservePositionMs: Long = playback.plan.startPositionMs,
     ): PlannedPlayback {
-        playback.queue.collectionId?.let { stateStore.saveCollectionPlaybackOrder(it, order) }
-        val reorderedQueue = reorderQueue(playback.queue, order)
+        playback.queue.collectionId?.let { stateStore.saveCollectionPlaybackOrder(it, order.forCollection(it)) }
+        val reorderedQueue = applySavedCollectionOrder(playback.queue, playback.plan.item.key, playback.plan.startIndex)
         val reorderedIndex = reorderedQueue.items.indexOfFirst { it.key == playback.plan.item.key }
             .takeIf { it >= 0 }
             ?: reorderedQueue.requestedIndex
@@ -1210,12 +1314,26 @@ class ListenRepository(context: Context) {
 
     fun previousIndex(queue: ResolvedQueue, currentIndex: Int): Int = wrapIndex(currentIndex - 1, queue.items.size)
 
+    fun adjacentPlayback(playback: PlannedPlayback, delta: Int): PlannedPlayback? {
+        val ordered = normalizePlaybackOrder(playback)
+        if (ordered.queue.items.size < 2) return null
+        if (ordered.queue.collectionId == SpecialFavorites.ID) {
+            val saved = loadFavorite(SpecialFavorites.ID)?.playback ?: return null
+            val keys = saved.queue.items.map { it.key }.toSet()
+            // A removed current part may finish, but must never be reached again by next/previous.
+            for (step in 1..ordered.queue.items.size) {
+                val candidate = ordered.queue.items[wrapIndex(ordered.plan.startIndex + delta * step, ordered.queue.items.size)]
+                if (candidate.key in keys) {
+                    return planPlaybackFromQueue(saved.queue, saved.queue.items.indexOfFirst { it.key == candidate.key }, "special favorites skip")
+                }
+            }
+            return null
+        }
+        return planPlaybackFromQueue(ordered.queue, wrapIndex(ordered.plan.startIndex + delta, ordered.queue.items.size), "media skip")
+    }
+
     fun rememberSession(playback: PlannedPlayback, updatedAt: Long = System.currentTimeMillis()) {
         val collectionId = playback.queue.collectionId ?: return
-        if (!isFavorited(playback)) {
-            stateStore.removeSession(collectionId)
-            return
-        }
         stateStore.saveSession(
             CollectionSession(
                 collectionId = collectionId,
@@ -1227,7 +1345,7 @@ class ListenRepository(context: Context) {
 
     fun saveLastPlayback(playback: PlannedPlayback) {
         val normalizedPlayback = normalizePlaybackOrder(playback)
-        if (!isFavorited(normalizedPlayback)) {
+        if (playback.queue.collectionId == SpecialFavorites.ID && specialFavorites.favorite() == null) {
             stateStore.saveLastPlaybackJson("")
             return
         }
@@ -1250,71 +1368,116 @@ class ListenRepository(context: Context) {
     fun loadLastPlayback(): PlannedPlayback? {
         val raw = stateStore.loadLastPlaybackJson() ?: return null
         val decoded = runCatching { PlaybackJsonCodec.decode(raw) }.getOrNull() ?: return null
-        val normalized = normalizePlaybackOrder(decoded)
-        return normalized.takeIf(::isFavorited)
+        if (decoded.queue.collectionId == SpecialFavorites.ID) return loadFavorite(SpecialFavorites.ID)?.playback
+        return normalizePlaybackOrder(decoded)
     }
 
     fun favoriteIdOf(playback: PlannedPlayback): String {
         return playback.queue.collectionId ?: "single:${playback.plan.item.key.asStoreKey()}"
     }
 
+    fun listeningTimeMs(collectionId: String): Long = listeningTime.totalMs(collectionId)
+
+    fun totalListeningTimeMs(): Long = listeningTime.totalMs()
+
+    internal fun addListeningTime(collectionId: String, elapsedMs: Long) = listeningTime.add(collectionId, elapsedMs)
+
+    fun isSpecialFavorited(key: ContentKey): Boolean = specialFavorites.contains(key)
+
+    fun toggleSpecialFavorite(playback: PlannedPlayback, updatedAt: Long = System.currentTimeMillis()): Boolean = synchronized(favoritesLock) {
+        specialFavorites.toggle(playback, updatedAt).also { updateCacheFavorites(updatedAt) }
+    }
+
+    fun specialFavoriteManualItems(): List<QueueItem> =
+        specialFavorites.manualItems(loadCollectionPlaybackOrder(SpecialFavorites.ID))
+
+    fun saveSpecialFavoriteOrder(keys: List<ContentKey>) {
+        specialFavorites.saveManualOrder(keys)
+        stateStore.saveCollectionPlaybackOrder(SpecialFavorites.ID, CollectionPlaybackOrder.MANUAL)
+    }
+
     fun isFavorited(playback: PlannedPlayback?): Boolean {
         if (playback == null) {
             return false
         }
+        if (playback.queue.collectionId == SpecialFavorites.ID) return specialFavorites.favorite() != null
         return stateStore.loadFavoriteJson(favoriteIdOf(playback)) != null
     }
 
     fun listFavorites(): List<FavoriteCollection> {
-        return stateStore.loadAllFavoriteJson()
+        val regular = stateStore.loadAllFavoriteJson()
             .mapNotNull { raw ->
                 runCatching { FavoriteJsonCodec.decode(raw) }
                     .getOrNull()
-                    ?.let { favorite -> favorite.copy(playback = normalizePlaybackOrder(favorite.playback)) }
+                    ?.let { favorite -> favorite.copy(playback = normalizePlaybackOrder(favorite.playback),
+                        listeningTimeMs = listeningTimeMs(favorite.id)) }
             }
             .sortedByDescending { it.updatedAt }
+        return listOfNotNull(loadFavorite(SpecialFavorites.ID)) + regular
     }
 
     fun loadFavorite(id: String): FavoriteCollection? {
+        if (id == SpecialFavorites.ID) return specialFavorites.favorite()?.let {
+            it.copy(playback = normalizePlaybackOrder(it.playback), listeningTimeMs = listeningTimeMs(id))
+        }
         val raw = stateStore.loadFavoriteJson(id) ?: return null
         return runCatching { FavoriteJsonCodec.decode(raw) }
             .getOrNull()
-            ?.let { favorite -> favorite.copy(playback = normalizePlaybackOrder(favorite.playback)) }
+            ?.let { favorite -> favorite.copy(playback = normalizePlaybackOrder(favorite.playback),
+                listeningTimeMs = listeningTimeMs(favorite.id)) }
     }
 
-    fun toggleFavorite(playback: PlannedPlayback, updatedAt: Long = System.currentTimeMillis()): Boolean {
+    fun toggleFavorite(playback: PlannedPlayback, updatedAt: Long = System.currentTimeMillis()): Boolean = synchronized(favoritesLock) {
         val id = favoriteIdOf(playback)
+        if (id == SpecialFavorites.ID) return isFavorited(playback)
         if (stateStore.loadFavoriteJson(id) != null) {
+            resumeRetention.removed(playback, updatedAt)
             stateStore.removeFavorite(id)
-            stateStore.clearCollectionProgress(playback.queue)
-            playback.queue.collectionId?.let(stateStore::removeSession)
-            stateStore.saveLastPlaybackJson("")
+            updateCacheFavorites(updatedAt)
             return false
         }
         saveFavorite(playback, updatedAt)
         return true
     }
 
-    fun saveFavorite(playback: PlannedPlayback, updatedAt: Long = System.currentTimeMillis()) {
+    fun saveFavorite(playback: PlannedPlayback, updatedAt: Long = System.currentTimeMillis()): Unit = synchronized(favoritesLock) {
         val normalizedPlayback = normalizePlaybackOrder(playback)
+        if (playback.queue.collectionId == SpecialFavorites.ID) {
+            specialFavorites.savePosition(normalizedPlayback)
+            return
+        }
         val favorite = FavoriteCollection(
             id = favoriteIdOf(normalizedPlayback),
             playback = normalizedPlayback,
             updatedAt = updatedAt,
         )
+        val newlyFavorited = stateStore.loadFavoriteJson(favorite.id) == null
         stateStore.saveFavoriteJson(favorite.id, FavoriteJsonCodec.encode(favorite))
+        resumeRetention.refavorited(favorite.id)
+        if (newlyFavorited) updateCacheFavorites(updatedAt)
     }
 
     fun clearCollectionProgress(queue: ResolvedQueue, keepKey: ContentKey? = null) {
         stateStore.clearCollectionProgress(queue, keepKey)
+        recentProgress.clear(queue, keepKey)
     }
 
     fun resolveAudio(playback: PlannedPlayback): ResolvedAudio = audioResolver.resolve(playback.plan.item)
 
     fun cachedAudioUri(item: QueueItem): Uri? = audioCacheManager.cachedAudioUri(item)
 
-    fun maintainAutoCache(playback: PlannedPlayback): AutoCacheMaintenanceResult {
-        return audioCacheManager.maintainWindow(playback)
+    fun cacheSnapshot(playback: PlannedPlayback): AudioCacheSnapshot =
+        audioCacheManager.snapshot(playback, isFavorited(playback)) { canAutoCache(playback, it) }
+
+    private fun canAutoCache(playback: PlannedPlayback, item: QueueItem): Boolean =
+        isFavorited(playback) && (playback.queue.collectionId != SpecialFavorites.ID || specialFavorites.contains(item.key))
+
+    fun invalidateCachedAudio(item: QueueItem) = audioCacheManager.invalidate(item)
+
+    fun maintainAutoCache(playback: PlannedPlayback, onCached: (QueueItem) -> Unit = {}): AutoCacheMaintenanceResult {
+        val previousKey = recentProgress.load(playback.queue).firstOrNull { it.key != playback.plan.item.key }?.key
+        val previous = playback.queue.items.firstOrNull { it.key == previousKey }
+        return audioCacheManager.maintainWindow(playback, previous, { canAutoCache(playback, it) }, onCached)
     }
 
     fun isWifiConnected(): Boolean = audioCacheManager.isWifiConnected()
@@ -1325,10 +1488,7 @@ class ListenRepository(context: Context) {
         updatedAt: Long = System.currentTimeMillis(),
     ): PlaybackProgress {
         val progress = planner.checkpoint(playback.plan.item, positionMs, updatedAt)
-        if (!isFavorited(playback)) {
-            return progress
-        }
-        stateStore.saveProgress(progress)
+        recentProgress.save(playback.queue, progress)
         rememberSession(playback, updatedAt)
         saveLastPlayback(playback, progress.positionMs)
         return progress
@@ -1352,21 +1512,10 @@ class ListenRepository(context: Context) {
 
         val collectionId = playback.queue.collectionId
         if (collectionId != null) {
-            if (isFavorited(playback)) {
-                stateStore.saveSession(CollectionSession(collectionId, nextIndex, updatedAt))
-            } else {
-                stateStore.removeSession(collectionId)
-            }
+            stateStore.saveSession(CollectionSession(collectionId, nextIndex, updatedAt))
         }
-        stateStore.clearCollectionProgress(playback.queue)
-        val nextItem = playback.queue.items[nextIndex]
-        val nextPlan = StartPlan(
-            startIndex = nextIndex,
-            item = nextItem,
-            startPositionMs = 0L,
-            reason = "auto next",
-        )
-        val nextPlayback = PlannedPlayback(playback.queue, nextPlan)
+        saveProgress(playback, completedItem.durationMs, updatedAt)
+        val nextPlayback = planPlaybackFromQueue(playback.queue, nextIndex, "auto next")
         saveLastPlayback(nextPlayback)
         return AdvanceOutcome(
             completedItem = completedItem,
@@ -1375,9 +1524,9 @@ class ListenRepository(context: Context) {
         )
     }
 
-    private fun updateFavoriteIfPresent(playback: PlannedPlayback, updatedAt: Long = System.currentTimeMillis()) {
+    private fun updateFavoriteIfPresent(playback: PlannedPlayback, updatedAt: Long = System.currentTimeMillis()): Unit = synchronized(favoritesLock) {
         val id = favoriteIdOf(playback)
-        if (stateStore.loadFavoriteJson(id) == null) {
+        if (id != SpecialFavorites.ID && stateStore.loadFavoriteJson(id) == null) {
             return
         }
         saveFavorite(playback, updatedAt)
@@ -1391,7 +1540,7 @@ class ListenRepository(context: Context) {
         return if (mod >= 0) mod else mod + size
     }
 
-    private fun normalizePlaybackOrder(playback: PlannedPlayback): PlannedPlayback {
+    fun normalizePlaybackOrder(playback: PlannedPlayback): PlannedPlayback {
         val reorderedQueue = applySavedCollectionOrder(
             queue = playback.queue,
             anchorKey = playback.plan.item.key,
@@ -1423,7 +1572,9 @@ class ListenRepository(context: Context) {
         fallbackIndex: Int?,
     ): ResolvedQueue {
         val order = loadCollectionPlaybackOrder(queue.collectionId)
-        val reorderedQueue = reorderQueue(queue, order)
+        val anchoredQueue = anchorKey?.let { key -> queue.items.indexOfFirst { it.key == key }.takeIf { it >= 0 } }
+            ?.let { queue.copy(requestedIndex = it) } ?: queue
+        val reorderedQueue = reorderQueue(anchoredQueue, order)
         if (anchorKey == null && fallbackIndex == null) {
             return reorderedQueue
         }
@@ -1438,38 +1589,19 @@ class ListenRepository(context: Context) {
         queue: ResolvedQueue,
         order: CollectionPlaybackOrder,
     ): ResolvedQueue {
-        if (queue.items.size <= 1 || order == CollectionPlaybackOrder.COLLECTION_DEFAULT) {
-            return queue
-        }
-        val sortedItems = when (order) {
-            CollectionPlaybackOrder.COLLECTION_DEFAULT -> queue.items
-            CollectionPlaybackOrder.PUBLISHED_ASC -> queue.items.sortedWith(
-                compareBy<QueueItem>(
-                    { publicationSortKey(it, ascending = true) },
-                    { it.orderInCollection },
-                ),
-            )
-
-            CollectionPlaybackOrder.PUBLISHED_DESC -> queue.items.sortedWith(
-                compareByDescending<QueueItem> { publicationSortKey(it, ascending = false) }
-                    .thenBy { it.orderInCollection },
-            )
-        }
-        val requestedKey = queue.items.getOrNull(queue.requestedIndex)?.key
-        val requestedIndex = requestedKey
-            ?.let { key -> sortedItems.indexOfFirst { it.key == key }.takeIf { it >= 0 } }
-            ?: queue.requestedIndex
-        return queue.copy(items = sortedItems, requestedIndex = requestedIndex)
+        return if (queue.collectionId == SpecialFavorites.ID) specialFavorites.orderedQueue(queue, order)
+        else QueueOrdering.reorder(queue, order)
     }
 
-    private fun publicationSortKey(
-        item: QueueItem,
-        ascending: Boolean,
-    ): Long {
-        if (item.publishedAtMs > 0L) {
-            return item.publishedAtMs
+    fun fillMissingPublicationTimes(playback: PlannedPlayback): PlannedPlayback {
+        if (playback.queue.items.all { it.publishedAtMs > 0 }) return playback
+        val seasonId = playback.queue.collectionId?.removePrefix("season:")?.toLongOrNull() ?: return playback
+        val authorMid = playback.queue.items.firstNotNullOfOrNull { it.authorMid } ?: return playback
+        val dates = api.fetchSeasonPublicationTimes(authorMid, seasonId)
+        val items = playback.queue.items.map { item ->
+            if (item.publishedAtMs > 0) item else item.copy(publishedAtMs = dates[item.key.bvid] ?: 0L)
         }
-        return if (ascending) Long.MAX_VALUE else Long.MIN_VALUE
+        return playback.copy(queue = playback.queue.copy(items = items), plan = playback.plan.copy(item = items[playback.plan.startIndex]))
     }
 
     private fun parseCreatorCollectionSummaries(
@@ -1653,11 +1785,12 @@ object AppGraph {
 
     fun repository(context: Context): ListenRepository {
         repositoryRef.get()?.let { return it }
-        val created = ListenRepository(context.applicationContext)
-        return if (repositoryRef.compareAndSet(null, created)) {
-            created
-        } else {
-            repositoryRef.get()!!
+        return synchronized(repositoryRef) {
+            repositoryRef.get() ?: ListenRepository(context.applicationContext).also {
+                // Run once on cold startup, before the UI, service or a widget restores playback.
+                it.cleanupExpiredResumeRecords()
+                repositoryRef.set(it)
+            }
         }
     }
 

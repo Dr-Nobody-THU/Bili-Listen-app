@@ -70,6 +70,11 @@ class DebugLogStore(context: Context) {
                 throwable?.stackTrace?.take(12)?.forEach { element ->
                     writer.appendLine("    at $element")
                 }
+                // Media3 wraps the useful decoder/processor/IO failure in PlaybackException.
+                generateSequence(throwable?.cause) { it.cause }.take(4).forEach { cause ->
+                    writer.appendLine("    caused by ${cause::class.java.simpleName}: ${cause.message}")
+                    cause.stackTrace.take(6).forEach { writer.appendLine("        at $it") }
+                }
             }
         }
 

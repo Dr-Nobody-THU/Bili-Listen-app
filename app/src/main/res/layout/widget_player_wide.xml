@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_content" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="10dp"
+    android:background="@drawable/widget_background">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:gravity="center_vertical" android:orientation="horizontal" android:baselineAligned="false">
+        <ImageView android:id="@+id/widget_cover" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:maxWidth="68dp" android:maxHeight="68dp" android:adjustViewBounds="true"
+            android:src="@drawable/widget_record" android:background="@drawable/widget_square_cover_background"
+            android:scaleType="centerCrop" android:contentDescription="@string/widget_cover" />
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:orientation="vertical" android:layout_marginStart="12dp">
+            <TextView android:id="@+id/widget_title" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="@string/widget_empty_title" android:textColor="#EAF0F2" android:textSize="15sp"
+                android:textStyle="bold" android:maxLines="2" android:ellipsize="end" />
+            <TextView android:id="@+id/widget_subtitle" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="3dp" android:text="@string/widget_empty_subtitle"
+                android:textColor="#A8BBBF" android:textSize="11sp" android:maxLines="1" android:ellipsize="end" />
+            <TextView android:id="@+id/widget_status" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="2dp" android:text="@string/app_name" android:textColor="#82DDC3"
+                android:textSize="11sp" android:maxLines="1" android:ellipsize="end" />
+        </LinearLayout>
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="24dp" android:layout_marginTop="4dp"
+        android:gravity="center_vertical" android:orientation="horizontal" android:baselineAligned="false">
+        <TextView android:id="@+id/widget_time" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:minWidth="34dp" android:text="@string/widget_zero_time" android:textColor="#A8BBBF"
+            android:textSize="11sp" android:maxLines="1" android:fontFamily="sans-serif" />
+        <ProgressBar android:id="@+id/widget_progress" style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="0dp" android:layout_weight="1" android:layout_height="6dp"
+            android:layout_marginHorizontal="9dp" android:progressDrawable="@drawable/widget_progress"
+            android:max="1000" android:progress="0" android:indeterminate="false" />
+        <TextView android:id="@+id/widget_duration" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:minWidth="34dp" android:gravity="end" android:text="@string/widget_zero_time"
+            android:textColor="#A8BBBF" android:textSize="11sp" android:maxLines="1" android:fontFamily="sans-serif" />
+    </LinearLayout>
+    <FrameLayout android:layout_width="match_parent" android:layout_height="48dp">
+        <TextView android:id="@+id/widget_switch_collection" android:layout_width="48dp" android:layout_height="48dp"
+            android:layout_gravity="start|center_vertical" android:gravity="center"
+            android:background="@android:color/transparent" android:text="@string/widget_switch_collection_short"
+            android:drawableTop="@drawable/ic_widget_collections" android:paddingTop="5dp" android:paddingBottom="4dp"
+            android:textColor="#A8BBBF" android:textSize="11sp" android:contentDescription="@string/widget_switch_collection"
+            android:focusable="true" android:clickable="true" />
+        <include android:id="@+id/widget_transport" layout="@layout/widget_controls"
+            android:layout_width="156dp" android:layout_height="48dp" android:layout_gravity="center" />
+    </FrameLayout>
+</LinearLayout>

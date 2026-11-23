@@ -2,6 +2,7 @@ build/
 state/
 .gradle/
 .gradle-user/
+.signing/
 .kotlin/
 tmp_verify/
 local.properties

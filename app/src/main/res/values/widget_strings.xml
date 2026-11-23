@@ -1,0 +1,16 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="widget_wide_name">栖声 · 横向播放器 4×2</string>
+    <string name="widget_compact_name">栖声 · 迷你播放器 2×2</string>
+    <string name="widget_description">在桌面播放、暂停和切换节目，查看播放进度。</string>
+    <string name="widget_previous">上一条</string>
+    <string name="widget_next">下一条</string>
+    <string name="widget_play">播放</string>
+    <string name="widget_cover">节目封面</string>
+    <string name="widget_empty_title">随时听，接着听</string>
+    <string name="widget_empty_subtitle">先在应用中选择节目</string>
+    <string name="widget_empty_time">00:00 / 00:00</string>
+    <string name="widget_zero_time">00:00</string>
+    <string name="widget_switch_collection">切换合集</string>
+    <string name="widget_switch_collection_short">合集</string>
+</resources>

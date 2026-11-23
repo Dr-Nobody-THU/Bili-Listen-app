@@ -1,11 +1,18 @@
 package com.bililisten.android.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -18,47 +25,68 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.QueueMusic
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -67,54 +95,64 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.CachePolicy
+import com.bililisten.android.data.AppGraph
+import com.bililisten.android.data.AppSkin
+import com.bililisten.android.R
+import com.bililisten.android.data.BackgroundAudioSettings
 import com.bililisten.android.data.CollectionPlaybackOrder
+import com.bililisten.android.data.ContentKey
+import com.bililisten.android.data.AudioCacheEntry
+import com.bililisten.android.data.AudioCacheSnapshot
+import com.bililisten.android.data.CachePhase
 import com.bililisten.android.data.CreatorCollectionSummary
 import com.bililisten.android.data.FavoriteCollection
+import com.bililisten.android.data.formatListeningTime
 import com.bililisten.android.data.PlayMode
 import com.bililisten.android.data.PlannedPlayback
 import com.bililisten.android.data.PlayerSettings
 import com.bililisten.android.data.PlayerSettingsStore
 import com.bililisten.android.data.QueueItem
 import com.bililisten.android.data.ResumePolicy
+import com.bililisten.android.data.SpecialFavorites
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToLong
+import kotlinx.coroutines.launch
 
-private val PrimaryTextColor = Color(0xFFF7F2ED)
-private val SecondaryTextColor = Color(0xFFE2D6CC)
-private val AccentColor = Color(0xFFF1E8DD)
-private val PanelColor = Color(0x4D1B120E)
-private val SoftPanelColor = Color(0x332C1D17)
-private val FavoriteInactiveBackground = Color(0xFFF4EEE6)
-private val FavoriteActiveBackground = Color(0xFFB9B0A7)
-private val TopControlHeight = 62.dp
+private val PrimaryTextColor: Color @Composable get() = MaterialTheme.colorScheme.onSurface
+private val SecondaryTextColor: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val AccentColor: Color @Composable get() = MaterialTheme.colorScheme.primary
+private val PanelColor: Color @Composable get() = MaterialTheme.colorScheme.surface
+private val SoftPanelColor: Color @Composable get() = MaterialTheme.colorScheme.surfaceVariant
+private val FavoriteInactiveBackground: Color @Composable get() = MaterialTheme.colorScheme.surfaceContainerHigh
+private val FavoriteActiveBackground: Color @Composable get() = AccentColor
+private val TopControlHeight = 56.dp
+private val CompactTopControlHeight = 48.dp
 private val TopSideButtonWidth = 82.dp
-
-private val ListenColorScheme = darkColorScheme(
-    primary = Color(0xFFF2F0EA),
-    onPrimary = Color(0xFF1A130F),
-    secondary = Color(0xFFC0A287),
-    onSecondary = Color(0xFF24140B),
-    tertiary = AccentColor,
-    background = Color(0xFF120B08),
-    onBackground = Color(0xFFF7F2ED),
-    surface = Color(0xFF1D120E),
-    onSurface = Color(0xFFF7F2ED),
-    surfaceVariant = Color(0xFF2A1C17),
-    onSurfaceVariant = Color(0xFFD3C1B5),
-    outline = Color(0xFF7B6255),
-)
 
 @Composable
 fun ListenScreen(
@@ -134,6 +172,16 @@ fun ListenScreen(
     onOpenCreatorCollections: () -> Unit,
     onOpenCreatorCollection: (CreatorCollectionSummary) -> Unit,
     onCollectionPlaybackOrderChanged: (CollectionPlaybackOrder) -> Unit,
+    onAllowMobileStreamingChanged: (Boolean) -> Unit,
+    onRetryCache: () -> Unit,
+    onFadePlaybackChanged: (Boolean) -> Unit,
+    onBackgroundAudioChanged: (BackgroundAudioSettings) -> Unit,
+    onMusicLockScreenChanged: (Boolean) -> Unit = {},
+    onSkinChanged: (AppSkin) -> Unit = {},
+    onToggleSpecialFavorite: () -> Unit = {},
+    onSaveSpecialFavoriteOrder: (List<ContentKey>) -> Unit = {},
+    onRecordCollectionSwitchChanged: (Boolean) -> Unit = {},
+    onConfirmRecordCollection: (String) -> Unit = onOpenFavorite,
 ) {
     var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
     var showQueueSheet by rememberSaveable { mutableStateOf(false) }
@@ -141,8 +189,20 @@ fun ListenScreen(
     var showFavoritesDrawer by rememberSaveable { mutableStateOf(false) }
     var showCreatorDrawer by rememberSaveable { mutableStateOf(false) }
     var inputExpanded by rememberSaveable { mutableStateOf(false) }
+    var recordBrowse by remember { mutableStateOf<RecordBrowseSession?>(null) }
+    var rootPosition by remember { mutableStateOf(Offset.Zero) }
+    val browseProgress = animateFloatAsState(if (recordBrowse?.active == true) 1f else 0f,
+        tween(320, easing = FastOutSlowInEasing), label = "record browser entrance",
+        finishedListener = { if (it == 0f && recordBrowse?.active == false) recordBrowse = null })
+    BackHandler(enabled = recordBrowse?.active == true) { recordBrowse?.active = false }
+    LaunchedEffect(state.playerSettings.recordCollectionSwitch, state.plannedPlayback?.let(::recordCollectionId)) {
+        if (!state.playerSettings.recordCollectionSwitch || recordBrowse?.originId != state.plannedPlayback?.let(::recordCollectionId)) {
+            recordBrowse?.active = false
+        }
+    }
     val display = resolveCurrentDisplay(state.plannedPlayback, state.playbackControl.mediaId)
     val lifecycleOwner = LocalLifecycleOwner.current
+    val landscape = isLandscapeWindow()
 
     LaunchedEffect(state.error) {
         if (state.error != null) {
@@ -158,6 +218,7 @@ fun ListenScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
                 inputExpanded = false
+                recordBrowse = null
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -166,94 +227,132 @@ fun ListenScreen(
         }
     }
 
-    MaterialTheme(colorScheme = ListenColorScheme) {
+    ListenTheme(state.playerSettings.skin) {
         TitleDetailSheet(
             visible = showTitleSheet && display != null,
             item = display?.item,
             onDismiss = { showTitleSheet = false },
         )
-        SettingsSheet(
-            visible = showSettingsSheet,
+        if (showSettingsSheet) PlaybackSettingsSheet(
             settings = state.playerSettings,
             onDismiss = { showSettingsSheet = false },
             onPlaybackSpeedChanged = onPlaybackSpeedChanged,
             onPlayModeChanged = onPlayModeChanged,
+            onAllowMobileStreamingChanged = onAllowMobileStreamingChanged,
+            onFadePlaybackChanged = onFadePlaybackChanged,
+            onBackgroundAudioChanged = onBackgroundAudioChanged,
+            onMusicLockScreenChanged = onMusicLockScreenChanged,
+            onSkinChanged = onSkinChanged,
+            onRecordCollectionSwitchChanged = onRecordCollectionSwitchChanged,
         )
         QueueSheet(
             visible = showQueueSheet && state.plannedPlayback != null && display != null,
             playback = state.plannedPlayback,
             activeIndex = display?.activeIndex ?: 0,
             currentOrder = state.currentCollectionPlaybackOrder,
+            cache = state.cacheSnapshot,
+            isSortingOrder = state.isSortingOrder,
+            onRetryCache = onRetryCache,
             onDismiss = { showQueueSheet = false },
             onPlayQueueIndex = { index ->
                 onPlayQueueIndex(index)
             },
             onCollectionPlaybackOrderChanged = onCollectionPlaybackOrderChanged,
+            manualItems = state.specialFavoriteManualItems,
+            onSaveManualOrder = onSaveSpecialFavoriteOrder,
         )
+        val playerHeader: @Composable () -> Unit = {
+            Row(
+                modifier = Modifier.fillMaxWidth().testTag("player_header")
+                    .then(if (recordBrowse?.active == true) Modifier.clearAndSetSemantics { } else Modifier),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (landscape) {
+                    Row(Modifier.testTag("player_header_brand"), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(painterResource(R.drawable.ic_stat_listen), null, Modifier.size(22.dp), tint = AccentColor)
+                        Text("  栖声", style = MaterialTheme.typography.titleMedium, color = PrimaryTextColor, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                TopInputBar(
+                    modifier = Modifier.weight(1f),
+                    input = state.input,
+                    expanded = inputExpanded,
+                    error = state.error,
+                    onExpandedChange = { inputExpanded = it },
+                    onInputChanged = onInputChanged,
+                    compact = landscape,
+                )
+                if (inputExpanded) {
+                    InputConfirmButton(
+                        isLoading = state.isLoading,
+                        compact = landscape,
+                        onClick = {
+                            inputExpanded = false
+                            onPlayRequested(ResumePolicy.PREFER_REQUESTED_ITEM)
+                        },
+                    )
+                } else {
+                    FavoriteDrawerButton(
+                        hasFavorites = state.favorites.isNotEmpty(),
+                        compact = landscape,
+                        onClick = {
+                            showTitleSheet = false
+                            showSettingsSheet = false
+                            showQueueSheet = false
+                            showCreatorDrawer = false
+                            showFavoritesDrawer = true
+                        },
+                    )
+                }
+            }
+        }
+        val dismissLandscapeInput: (() -> Unit)? = if (landscape && inputExpanded) ({ inputExpanded = false }) else null
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .onGloballyPositioned { rootPosition = it.positionInRoot() }
+                .dismissRecordBrowseOutside(recordBrowse, rootPosition)
                 .background(
                     Brush.verticalGradient(
-                        listOf(Color(0xFF2E1A14), Color(0xFF160E0B), Color(0xFF0C0807)),
+                        listOf(MaterialTheme.colorScheme.surfaceBright, MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.surfaceDim),
                     ),
                 ),
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                    .safeDrawingPadding()
+                    .padding(start = 18.dp, end = 18.dp, top = if (landscape) 2.dp else 14.dp,
+                        bottom = if (landscape) 8.dp else 14.dp),
+                verticalArrangement = Arrangement.spacedBy(if (landscape) 8.dp else 14.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    TopInputBar(
-                        modifier = Modifier.weight(1f),
-                        input = state.input,
-                        expanded = inputExpanded,
-                        error = state.error,
-                        onExpandedChange = { inputExpanded = it },
-                        onInputChanged = onInputChanged,
-                    )
-                    if (inputExpanded) {
-                        InputConfirmButton(
-                            isLoading = state.isLoading,
-                            onClick = {
-                                inputExpanded = false
-                                onPlayRequested(ResumePolicy.PREFER_REQUESTED_ITEM)
-                            },
-                        )
-                    } else {
-                        FavoriteDrawerButton(
-                            hasFavorites = state.favorites.isNotEmpty(),
-                            onClick = {
-                                showTitleSheet = false
-                                showSettingsSheet = false
-                                showQueueSheet = false
-                                showCreatorDrawer = false
-                                showFavoritesDrawer = true
-                            },
-                        )
+                if (!landscape) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(painterResource(R.drawable.ic_stat_listen), contentDescription = null, tint = AccentColor, modifier = Modifier.size(22.dp))
+                        Text("  栖声", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = PrimaryTextColor)
+                        Spacer(Modifier.weight(1f))
+                        Text("随时听，接着听", style = MaterialTheme.typography.labelMedium, color = SecondaryTextColor)
                     }
                 }
+                if (!landscape) playerHeader()
                 Box(
                     modifier = Modifier.fillMaxWidth().weight(1f, fill = true),
                     contentAlignment = Alignment.TopCenter,
                 ) {
                     if (state.plannedPlayback == null || display == null) {
-                        EmptyPlayerCard()
+                        EmptyPlayerCard(landscape, playerHeader, dismissLandscapeInput)
                     } else {
                         PlayerScene(
                             playback = state.plannedPlayback,
                             display = display,
                             playbackControl = state.playbackControl,
+                            playbackError = state.playbackError,
+                            listeningTimeMs = state.totalListeningTimeMs,
                             isFavorited = state.currentFavoriteId != null,
                             onToggleFavorite = onToggleFavorite,
+                            isSpecialFavorited = state.isCurrentSpecialFavorite,
+                            onToggleSpecialFavorite = onToggleSpecialFavorite,
                             onOpenCreatorCollections = {
                                 inputExpanded = false
                                 showTitleSheet = false
@@ -292,9 +391,20 @@ fun ListenScreen(
                                 showCreatorDrawer = false
                                 showQueueSheet = true
                             },
+                            landscape = landscape,
+                            landscapeHeader = playerHeader,
+                            onDismissInput = dismissLandscapeInput,
+                            recordBrowse = recordBrowse,
+                            browseProgress = browseProgress,
+                            onBrowseCollections = if (state.playerSettings.recordCollectionSwitch) ({
+                                inputExpanded = false
+                                recordBrowse = RecordBrowseSession(state.plannedPlayback.copy(plan = state.plannedPlayback.plan.copy(
+                                    item = display.item, startIndex = display.activeIndex)), state.favorites)
+                            }) else null,
+                            onConfirmRecordCollection = onConfirmRecordCollection,
                         )
                     }
-                    if (inputExpanded) {
+                    if (inputExpanded && !landscape) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -337,11 +447,13 @@ private fun TopInputBar(
     error: String?,
     onExpandedChange: (Boolean) -> Unit,
     onInputChanged: (String) -> Unit,
+    compact: Boolean = false,
 ) {
     Card(
-        modifier = modifier.height(TopControlHeight),
-        colors = CardDefaults.cardColors(containerColor = Color(0x661F1511), contentColor = PrimaryTextColor),
+        modifier = modifier.height(if (compact) CompactTopControlHeight else TopControlHeight).testTag("player_import_input"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, contentColor = PrimaryTextColor),
         shape = RoundedCornerShape(22.dp),
+        border = if (compact && expanded) BorderStroke(1.dp, if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline) else null,
     ) {
         if (!expanded) {
             Row(
@@ -354,7 +466,7 @@ private fun TopInputBar(
             ) {
                 Box(modifier = Modifier.size(10.dp).background(AccentColor, CircleShape))
                 Text(
-                    text = if (input.isBlank()) "导入 BV 或 B 站链接" else input,
+                    text = if (input.isBlank()) (if (compact) "导入 BV / AU" else "导入 BV / AU 或链接") else input,
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
@@ -364,6 +476,29 @@ private fun TopInputBar(
                 )
                 Icon(Icons.Rounded.ArrowDropDown, contentDescription = "展开输入栏", tint = SecondaryTextColor, modifier = Modifier.size(24.dp))
             }
+        } else if (compact) {
+            // An outlined field's floating label needs a taller frame. Keep landscape's
+            // editor in the same 48 dp frame as its collapsed state and its neighboring button.
+            BasicTextField(
+                value = input,
+                onValueChange = onInputChanged,
+                modifier = Modifier.fillMaxSize().semantics { contentDescription = "BV / AU 号或链接" },
+                textStyle = MaterialTheme.typography.titleSmall.copy(color = PrimaryTextColor),
+                singleLine = true,
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(AccentColor),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                decorationBox = { editor ->
+                    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.Center) {
+                        if (error != null) Text(error, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                            if (input.isBlank()) Text("BV / AU 号或链接", style = MaterialTheme.typography.titleSmall,
+                                color = SecondaryTextColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            editor()
+                        }
+                    }
+                },
+            )
         } else {
             OutlinedTextField(
                 value = input,
@@ -371,11 +506,11 @@ private fun TopInputBar(
                 modifier = Modifier.fillMaxSize(),
                 label = {
                     Text(
-                        text = error ?: "BV 号或链接",
+                        text = error ?: "BV / AU 号或链接",
                         color = if (error != null) Color(0xFFFFD1CF) else SecondaryTextColor,
                     )
                 },
-                placeholder = { Text("https://www.bilibili.com/video/BV...") },
+                placeholder = { Text("B 站视频或纯音频链接") },
                 singleLine = true,
                 isError = error != null,
                 shape = RoundedCornerShape(22.dp),
@@ -389,11 +524,13 @@ private fun TopInputBar(
 private fun InputConfirmButton(
     isLoading: Boolean,
     onClick: () -> Unit,
+    compact: Boolean = false,
 ) {
     Button(
         onClick = onClick,
         enabled = !isLoading,
-        modifier = Modifier.width(TopSideButtonWidth).height(TopControlHeight),
+        modifier = Modifier.width(TopSideButtonWidth).height(if (compact) CompactTopControlHeight else TopControlHeight)
+            .testTag("player_header_action"),
         shape = RoundedCornerShape(22.dp),
     ) {
         Text(
@@ -409,19 +546,21 @@ private fun InputConfirmButton(
 private fun FavoriteDrawerButton(
     hasFavorites: Boolean,
     onClick: () -> Unit,
+    compact: Boolean = false,
 ) {
     Surface(
-        modifier = Modifier.width(TopSideButtonWidth).height(TopControlHeight).clickable(onClick = onClick),
+        modifier = Modifier.width(TopSideButtonWidth).height(if (compact) CompactTopControlHeight else TopControlHeight)
+            .testTag("player_header_action").clickable(onClick = onClick),
         shape = RoundedCornerShape(22.dp),
-        color = if (hasFavorites) Color(0xFFF1E8DD) else Color(0x332B1D17),
+        color = if (hasFavorites) AccentColor else SoftPanelColor,
     ) {
         Column(
             modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("收藏夹", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = if (hasFavorites) Color(0xFF1A130F) else PrimaryTextColor)
-            Text(if (hasFavorites) "查看续播" else "暂无收藏", style = MaterialTheme.typography.bodySmall, color = if (hasFavorites) Color(0xFF47342B) else SecondaryTextColor, maxLines = 1)
+            Text("收藏夹", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = if (hasFavorites) MaterialTheme.colorScheme.onPrimary else PrimaryTextColor)
+            if (!compact) Text(if (hasFavorites) "查看续播" else "暂无收藏", style = MaterialTheme.typography.bodySmall, color = if (hasFavorites) MaterialTheme.colorScheme.onPrimary.copy(alpha = .8f) else SecondaryTextColor, maxLines = 1)
         }
     }
 }
@@ -441,15 +580,14 @@ private fun FavoriteDrawer(
     ) {
         Surface(
             modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(320.dp),
-            color = Color(0xFF160F0C),
+            color = PanelColor,
             tonalElevation = 10.dp,
             shadowElevation = 18.dp,
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
+                    .safeDrawingPadding()
                     .padding(horizontal = 16.dp, vertical = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
@@ -464,9 +602,9 @@ private fun FavoriteDrawer(
                         )
                     }
                 } else {
-                    LazyColumn(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LazyColumn(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp), overscrollEffect = null) {
                         items(favorites, key = { it.id }) { favorite ->
-                            FavoriteDrawerRow(
+                            FavoriteCollectionRow(
                                 favorite = favorite,
                                 isActive = favorite.id == activeFavoriteId,
                                 onClick = { onOpenFavorite(favorite.id) },
@@ -480,7 +618,7 @@ private fun FavoriteDrawer(
 }
 
 @Composable
-private fun FavoriteDrawerRow(
+internal fun FavoriteCollectionRow(
     favorite: FavoriteCollection,
     isActive: Boolean,
     onClick: () -> Unit,
@@ -488,33 +626,43 @@ private fun FavoriteDrawerRow(
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(22.dp),
-        color = if (isActive) Color(0x4DE0C7B2) else Color(0x332B1D17),
+        color = if (isActive) MaterialTheme.colorScheme.primaryContainer else SoftPanelColor,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Surface(modifier = Modifier.width(108.dp), shape = RoundedCornerShape(16.dp), color = Color(0xFF231815)) {
-                if (favorite.coverUrl != null) {
-                    AsyncImage(
+            Surface(modifier = Modifier.size(64.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceDim) {
+                if (favorite.id == SpecialFavorites.ID) {
+                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Favorite, null, Modifier.size(28.dp), tint = AccentColor)
+                    }
+                } else if (favorite.coverUrl != null) {
+                    CachedArtwork(
                         model = favorite.coverUrl,
                         contentDescription = favorite.title,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                        modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
                 } else {
                     Box(
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color(0xFF3B2A23)),
+                        modifier = Modifier.fillMaxSize().background(SoftPanelColor),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("暂无封面", style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+                        Icon(Icons.Rounded.Headphones, contentDescription = null, tint = SecondaryTextColor)
                     }
                 }
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(favorite.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = PrimaryTextColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("共 ${favorite.itemCount} 个内容", style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+                Text("第 ${favorite.playback.plan.startIndex + 1} / ${favorite.itemCount} 条${if (isActive) " · 当前合集" else ""}",
+                    style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor, maxLines = 1)
+                if (favorite.id == SpecialFavorites.ID) Text(
+                    "${favorite.playback.queue.items.distinctBy { it.key.bvid }.size} 个稿件 · 按音频收藏",
+                    style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor, maxLines = 1)
+                Text("累计收听 ${formatListeningTime(favorite.listeningTimeMs)}", style = MaterialTheme.typography.bodySmall,
+                    color = AccentColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -537,15 +685,14 @@ private fun CreatorCollectionDrawer(
     ) {
         Surface(
             modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(320.dp),
-            color = Color(0xFF160F0C),
+            color = PanelColor,
             tonalElevation = 10.dp,
             shadowElevation = 18.dp,
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
+                    .safeDrawingPadding()
                     .padding(horizontal = 16.dp, vertical = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
@@ -582,6 +729,7 @@ private fun CreatorCollectionDrawer(
                         LazyColumn(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
+                            overscrollEffect = null,
                         ) {
                             items(creatorCollections, key = { it.id }) { summary ->
                                 CreatorCollectionDrawerRow(
@@ -607,7 +755,7 @@ private fun CreatorCollectionDrawerRow(
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(22.dp),
-        color = if (isActive) Color(0x4DE0C7B2) else Color(0x332B1D17),
+        color = if (isActive) MaterialTheme.colorScheme.primaryContainer else SoftPanelColor,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
@@ -617,10 +765,10 @@ private fun CreatorCollectionDrawerRow(
             Surface(
                 modifier = Modifier.width(108.dp),
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF231815),
+                color = MaterialTheme.colorScheme.surfaceDim,
             ) {
                 if (summary.coverUrl != null) {
-                    AsyncImage(
+                    CachedArtwork(
                         model = summary.coverUrl,
                         contentDescription = summary.title,
                         modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
@@ -628,7 +776,7 @@ private fun CreatorCollectionDrawerRow(
                     )
                 } else {
                     Box(
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color(0x332B1D17)),
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(SoftPanelColor),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text("无封面", style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
@@ -658,23 +806,66 @@ private fun CreatorCollectionDrawerRow(
 }
 
 @Composable
-private fun EmptyPlayerCard() {
+private fun EmptyPlayerCard(landscape: Boolean, landscapeHeader: @Composable () -> Unit, onDismissInput: (() -> Unit)?) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0x4D201612), contentColor = PrimaryTextColor),
+        modifier = Modifier.fillMaxSize(),
+        colors = CardDefaults.cardColors(containerColor = PanelColor, contentColor = PrimaryTextColor),
         shape = RoundedCornerShape(30.dp),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Box(
-                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color(0x332D211B), RoundedCornerShape(30.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("封面会显示在这里", style = MaterialTheme.typography.titleMedium, color = SecondaryTextColor)
+        PlayerBody(landscape = landscape, landscapeHeader = landscapeHeader, onDismissInput = onDismissInput,
+            artwork = { VinylRecord(null, false) }) {
+            Text("导入 B 站视频、合集或纯音频链接，开始聆听。", style = MaterialTheme.typography.bodyMedium, color = SecondaryTextColor, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun PlayerBody(
+    landscape: Boolean,
+    landscapeHeader: @Composable () -> Unit,
+    onDismissInput: (() -> Unit)?,
+    artwork: @Composable () -> Unit,
+    browsing: Boolean = false,
+    controls: @Composable ColumnScope.() -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp,
+        top = if (landscape) 4.dp else 16.dp, bottom = if (landscape) 10.dp else 16.dp)) {
+        if (landscape) {
+            Row(Modifier.fillMaxSize().testTag("landscape_player"), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                Box(Modifier.weight(.44f).fillMaxHeight().testTag("player_artwork_area"), contentAlignment = Alignment.Center) {
+                    artwork()
+                    if (onDismissInput != null) Box(Modifier.fillMaxSize().clickable(onClick = onDismissInput))
+                }
+                Column(Modifier.weight(.56f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    landscapeHeader()
+                    Box(Modifier.fillMaxWidth().weight(1f).testTag("player_controls_viewport")) {
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState(), reverseScrolling = true)
+                            .then(if (browsing) Modifier.clearAndSetSemantics { } else Modifier)
+                            .testTag("player_controls"), verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically), content = controls)
+                        // Dismiss taps cover the player, while the header's editor and confirm button remain interactive.
+                        if (onDismissInput != null) Box(Modifier.fillMaxSize().clickable(onClick = onDismissInput))
+                    }
+                }
             }
-            Text("先导入一个合集链接，再进入听视频页面。", style = MaterialTheme.typography.bodyMedium, color = SecondaryTextColor, textAlign = TextAlign.Center)
+        } else {
+            val gap = 14.dp.coerceAtMost(maxHeight)
+            // Preserve a little artwork space when the keyboard or larger fonts reduce the height.
+            // The controls can scroll from their bottom edge in this constrained case.
+            val minimumArtworkHeight = 96.dp.coerceAtMost(maxHeight / 4)
+            val controlsMaxHeight = (maxHeight - minimumArtworkHeight - gap).coerceAtLeast(0.dp)
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
+                Box(Modifier.fillMaxWidth().weight(1f).testTag("player_artwork_area"), contentAlignment = Alignment.Center) {
+                    artwork()
+                }
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = controlsMaxHeight)
+                        .verticalScroll(rememberScrollState(), reverseScrolling = true)
+                        .then(if (browsing) Modifier.clearAndSetSemantics { } else Modifier)
+                        .testTag("player_controls"),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    content = controls,
+                )
+            }
         }
     }
 }
@@ -684,8 +875,12 @@ private fun PlayerScene(
     playback: PlannedPlayback,
     display: CurrentDisplay,
     playbackControl: PlaybackControlState,
+    playbackError: String?,
+    listeningTimeMs: Long,
     isFavorited: Boolean,
     onToggleFavorite: () -> Unit,
+    isSpecialFavorited: Boolean,
+    onToggleSpecialFavorite: () -> Unit,
     onOpenCreatorCollections: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekTo: (Long) -> Unit,
@@ -695,64 +890,85 @@ private fun PlayerScene(
     onOpenTitleDetails: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenQueue: () -> Unit,
+    landscape: Boolean,
+    landscapeHeader: @Composable () -> Unit,
+    onDismissInput: (() -> Unit)?,
+    recordBrowse: RecordBrowseSession?,
+    browseProgress: State<Float>,
+    onBrowseCollections: (() -> Unit)?,
+    onConfirmRecordCollection: (String) -> Unit,
 ) {
     val activeItem = display.item
     var isDragging by remember(playbackControl.mediaId) { mutableStateOf(false) }
     var dragPositionMs by remember(playbackControl.mediaId) { mutableFloatStateOf(playbackControl.positionMs.toFloat()) }
+    val forestState = rememberSaveable { mutableStateOf(false) }
+    val sourceLabel = if (playbackError != null) "播放已停止" else when (playbackControl.localAudio) {
+        true -> "本地缓存播放"
+        false -> "在线播放"
+        null -> "准备就绪"
+    }
 
     LaunchedEffect(playbackControl.mediaId, playbackControl.positionMs, isDragging) {
         if (!isDragging) dragPositionMs = playbackControl.positionMs.toFloat()
     }
 
     Card(
+        modifier = Modifier.fillMaxSize(),
         colors = CardDefaults.cardColors(containerColor = PanelColor, contentColor = PrimaryTextColor),
         shape = RoundedCornerShape(32.dp),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Surface(
-                    modifier = Modifier.widthIn(max = maxWidth.coerceAtMost(360.dp)),
-                    shape = RoundedCornerShape(32.dp),
-                    shadowElevation = 18.dp,
-                    tonalElevation = 4.dp,
-                    color = Color(0xFF201613),
-                ) {
-                    if (activeItem.coverUrl != null) {
-                        AsyncImage(
-                            model = activeItem.coverUrl,
-                            contentDescription = activeItem.title,
-                            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-                            contentScale = ContentScale.Fit,
+        PlayerBody(landscape = landscape, landscapeHeader = landscapeHeader, onDismissInput = onDismissInput,
+            browsing = recordBrowse?.active == true, artwork = {
+            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    ListeningArtwork(
+                        coverUrl = activeItem.coverUrl,
+                        playing = playbackControl.isPlaying,
+                        listeningTimeMs = listeningTimeMs,
+                        forestState = forestState,
+                        recordBrowse = recordBrowse,
+                        browseProgress = browseProgress,
+                        onBrowseCollections = onBrowseCollections,
+                        onConfirmRecordCollection = onConfirmRecordCollection,
+                        artworkKey = recordCollectionId(playback),
+                        landscape = landscape,
+                    )
+                }
+                if (landscape) Text(sourceLabel, style = MaterialTheme.typography.labelSmall, color = SecondaryTextColor)
+            }
+        }) {
+            Column(verticalArrangement = Arrangement.spacedBy(if (landscape) 4.dp else 10.dp)) {
+                Box(Modifier.fillMaxWidth().heightIn(min = if (landscape) 52.dp else 74.dp)) {
+                    Column(Modifier.fillMaxWidth().graphicsLayer { alpha = 1f - browseProgress.value },
+                        verticalArrangement = Arrangement.spacedBy(if (landscape) 4.dp else 10.dp)) {
+                        Text(
+                            "${display.activeIndex + 1} / ${playback.queue.items.size}  ·  ${playback.queue.collectionTitle ?: "单条音频"}",
+                            modifier = Modifier.testTag("player_episode_count"),
+                            style = MaterialTheme.typography.labelMedium, color = AccentColor, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
-                    } else {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color(0xFF2F201A)),
-                            contentAlignment = Alignment.Center,
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenTitleDetails),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text("暂无封面", style = MaterialTheme.typography.titleMedium, color = SecondaryTextColor)
+                            Text(activeItem.title, modifier = Modifier.weight(1f), style = if (landscape) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = PrimaryTextColor, maxLines = if (landscape) 1 else 2, overflow = TextOverflow.Ellipsis)
+                            Icon(Icons.Rounded.ArrowDropDown, contentDescription = if (activeItem.key.audioId != null) "展开音频详情" else "展开视频详情", tint = SecondaryTextColor, modifier = Modifier.size(28.dp))
                         }
                     }
-                }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenTitleDetails),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(activeItem.title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = PrimaryTextColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Icon(Icons.Rounded.ArrowDropDown, contentDescription = "展开视频详情", tint = SecondaryTextColor, modifier = Modifier.size(28.dp))
+                    if (recordBrowse != null) Box(Modifier.fillMaxWidth().graphicsLayer { alpha = browseProgress.value }) {
+                        RecordCollectionTitle(recordBrowse, landscape)
+                    }
                 }
                 AuthorRow(
                     authorName = activeItem.authorName,
                     authorAvatarUrl = activeItem.authorAvatarUrl,
-                    canOpenCreatorCollections = activeItem.authorMid != null,
+                    canOpenCreatorCollections = activeItem.authorMid != null && activeItem.key.audioId == null,
                     isFavorited = isFavorited,
                     onOpenCreatorCollections = onOpenCreatorCollections,
                     onToggleFavorite = onToggleFavorite,
+                    isSpecialFavorited = isSpecialFavorited,
+                    onToggleSpecialFavorite = onToggleSpecialFavorite,
+                    isSpecialPlaylist = playback.queue.collectionId == SpecialFavorites.ID,
                 )
             }
             val sliderMax = playbackControl.durationMs.takeIf { it > 0L }?.toFloat() ?: 1f
@@ -761,6 +977,7 @@ private fun PlayerScene(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                if (landscape) Text(formatTime(dragPositionMs.roundToLong()), style = MaterialTheme.typography.labelSmall, color = SecondaryTextColor)
                 QuickSeekButton(
                     icon = Icons.Rounded.Replay,
                     contentDescription = "后退 15 秒",
@@ -769,6 +986,7 @@ private fun PlayerScene(
                     onClick = { onSeekBy(-15_000L) },
                 )
                 Slider(
+                    colors = SliderDefaults.colors(inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant),
                     value = dragPositionMs.coerceIn(0f, sliderMax),
                     onValueChange = {
                         isDragging = true
@@ -789,40 +1007,48 @@ private fun PlayerScene(
                     mirrored = true,
                     onClick = { onSeekBy(15_000L) },
                 )
+                if (landscape) Text(formatTime(playbackControl.durationMs.takeIf { it > 0L } ?: activeItem.durationMs), style = MaterialTheme.typography.labelSmall, color = SecondaryTextColor)
             }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatTime(dragPositionMs.roundToLong()), style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
-                Text(formatTime(playbackControl.durationMs.takeIf { it > 0L } ?: activeItem.durationMs), style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+            if (!landscape) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(formatTime(dragPositionMs.roundToLong()), style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+                    Text(formatTime(playbackControl.durationMs.takeIf { it > 0L } ?: activeItem.durationMs), style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+                }
             }
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                CenteredControlSlot(Modifier.weight(1f)) { SideControlButton(Icons.Rounded.Tune, onOpenSettings) }
-                CenteredControlSlot(Modifier.weight(1f)) {
-                    TransportButton(playbackControl.hasActiveItem, onSkipPrevious) {
-                        Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一条", modifier = Modifier.size(24.dp), tint = PrimaryTextColor)
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                SideControlButton(Icons.Rounded.Tune, onOpenSettings, modifier = Modifier.weight(1f, fill = false))
+                TransportButton(playbackControl.hasActiveItem, onSkipPrevious, Modifier.weight(1f, fill = false)) {
+                    Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一条", modifier = Modifier.size(24.dp), tint = PrimaryTextColor)
+                }
+                Surface(
+                    onClick = onTogglePlayPause,
+                    enabled = playbackControl.hasActiveItem,
+                    modifier = Modifier.weight(1f, fill = false).size(60.dp),
+                    shape = CircleShape,
+                    color = AccentColor,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        if (playbackControl.isBuffering) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                        } else Icon(
+                            imageVector = if (playbackControl.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = if (playbackControl.isPlaying) "暂停" else "播放",
+                            modifier = Modifier.size(34.dp),
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                        )
                     }
                 }
-                CenteredControlSlot(Modifier.weight(1f)) {
-                    Icon(
-                        imageVector = if (playbackControl.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (playbackControl.isPlaying) "暂停" else "播放",
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clickable(
-                                enabled = playbackControl.hasActiveItem,
-                                onClick = onTogglePlayPause,
-                            ),
-                        tint = if (playbackControl.hasActiveItem) PrimaryTextColor else Color(0x66F7F2ED),
-                    )
+                TransportButton(playbackControl.hasActiveItem, onSkipNext, Modifier.weight(1f, fill = false)) {
+                    Icon(Icons.Rounded.SkipNext, contentDescription = "下一条", modifier = Modifier.size(24.dp), tint = PrimaryTextColor)
                 }
-                CenteredControlSlot(Modifier.weight(1f)) {
-                    TransportButton(playbackControl.hasActiveItem, onSkipNext) {
-                        Icon(Icons.Rounded.SkipNext, contentDescription = "下一条", modifier = Modifier.size(24.dp), tint = PrimaryTextColor)
-                    }
-                }
-                CenteredControlSlot(Modifier.weight(1f)) {
-                    SideControlButton(Icons.Rounded.QueueMusic, onOpenQueue, playback.queue.items.isNotEmpty())
-                }
+                SideControlButton(Icons.AutoMirrored.Rounded.QueueMusic, onOpenQueue, playback.queue.items.isNotEmpty(), Modifier.weight(1f, fill = false))
             }
+            if (playbackError != null) {
+                Text(playbackError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
+            if (!landscape) Text(sourceLabel, Modifier.align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.labelSmall, color = SecondaryTextColor)
         }
     }
 }
@@ -836,9 +1062,9 @@ private fun TitleDetailSheet(
 ) {
     if (!visible || item == null) return
 
-    ModalBottomSheet(
+    StableBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1B120F),
+        containerColor = PanelColor,
         contentColor = PrimaryTextColor,
         dragHandle = { BottomSheetDefaults.DragHandle(color = MaterialTheme.colorScheme.outline) },
     ) {
@@ -846,7 +1072,7 @@ private fun TitleDetailSheet(
             modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("视频详情", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = PrimaryTextColor)
+            Text(if (item.key.audioId != null) "音频详情" else "视频详情", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = PrimaryTextColor)
             Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = PrimaryTextColor)
             Text(
                 text = "播放量 ${formatViewCount(item.viewCount)} · ${formatPublishDate(item.publishedAtMs)} · ${item.key.bvid}",
@@ -859,45 +1085,113 @@ private fun TitleDetailSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsSheet(
-    visible: Boolean,
-    settings: PlayerSettings,
-    onDismiss: () -> Unit,
-    onPlaybackSpeedChanged: (Float) -> Unit,
-    onPlayModeChanged: (PlayMode) -> Unit,
-) {
-    if (!visible) return
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1B120F),
-        contentColor = PrimaryTextColor,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = MaterialTheme.colorScheme.outline) },
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            Text("播放设置", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = PrimaryTextColor)
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("倍速", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = PrimaryTextColor)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PlayerSettingsStore.SUPPORTED_SPEEDS.forEach { speed ->
-                        SelectPill(modifier = Modifier.weight(1f), selected = speed == settings.speed, onClick = { onPlaybackSpeedChanged(speed) }, text = formatSpeed(speed))
+private fun SkinPicker(selected: AppSkin, onSkinChanged: (AppSkin) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("界面皮肤", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AppSkin.entries.forEach { skin ->
+                val colors = listenColorScheme(skin)
+                val active = skin == selected
+                Surface(
+                    modifier = Modifier.weight(1f).selectable(active, role = Role.RadioButton, onClick = { onSkinChanged(skin) }),
+                    shape = RoundedCornerShape(18.dp),
+                    color = colors.background,
+                    border = BorderStroke(if (active) 2.dp else 1.dp, if (active) colors.primary else colors.outlineVariant),
+                ) {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(Modifier.size(22.dp).background(colors.primary, CircleShape))
+                        Text(skin.label, color = colors.onSurface, style = MaterialTheme.typography.labelLarge)
                     }
                 }
             }
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("播放模式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = PrimaryTextColor)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SelectPill(Modifier.weight(1f), settings.playMode == PlayMode.AUTO_NEXT, { onPlayModeChanged(PlayMode.AUTO_NEXT) }, "自动连播")
-                    SelectPill(Modifier.weight(1f), settings.playMode == PlayMode.SINGLE_LOOP, { onPlayModeChanged(PlayMode.SINGLE_LOOP) }, "单集循环")
+        }
+    }
+}
+
+@Composable
+internal fun PlaybackSettingsContent(
+    settings: PlayerSettings,
+    onPlaybackSpeedChanged: (Float) -> Unit,
+    onPlayModeChanged: (PlayMode) -> Unit,
+    onAllowMobileStreamingChanged: (Boolean) -> Unit,
+    onFadePlaybackChanged: (Boolean) -> Unit,
+    onBackgroundAudioChanged: (BackgroundAudioSettings) -> Unit,
+    onOpenBackground: () -> Unit,
+    onMusicLockScreenChanged: (Boolean) -> Unit,
+    onOpenMusicLockScreen: () -> Unit,
+    onSkinChanged: (AppSkin) -> Unit,
+    onRecordCollectionSwitchChanged: (Boolean) -> Unit = {},
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        Text("播放设置", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = PrimaryTextColor)
+        SkinPicker(settings.skin, onSkinChanged)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("长按唱片切换合集", style = MaterialTheme.typography.titleSmall)
+                Text("竖屏左右、横屏上下浏览收藏合集，点唱片确认播放；点其他区域取消。森林模式不触发。",
+                    style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+            }
+            Switch(settings.recordCollectionSwitch, onRecordCollectionSwitchChanged,
+                modifier = Modifier.semantics { contentDescription = "长按唱片切换合集" })
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("倍速", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = PrimaryTextColor)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PlayerSettingsStore.SUPPORTED_SPEEDS.forEach { speed ->
+                    SelectPill(modifier = Modifier.weight(1f), selected = speed == settings.speed, onClick = { onPlaybackSpeedChanged(speed) }, text = formatSpeed(speed))
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
         }
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("播放模式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = PrimaryTextColor)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SelectPill(Modifier.weight(1f), settings.playMode == PlayMode.AUTO_NEXT, { onPlayModeChanged(PlayMode.AUTO_NEXT) }, "自动连播")
+                SelectPill(Modifier.weight(1f), settings.playMode == PlayMode.SINGLE_LOOP, { onPlayModeChanged(PlayMode.SINGLE_LOOP) }, "单集循环")
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("声音淡入淡出", style = MaterialTheme.typography.titleSmall)
+                Text("播放和暂停时，音量在约 0.4 秒内平滑过渡。", style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+            }
+            Switch(checked = settings.fadePlayback, onCheckedChange = onFadePlaybackChanged,
+                modifier = Modifier.semantics { contentDescription = "声音淡入淡出" })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("背景音", style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = onOpenBackground, contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.semantics { contentDescription = "选择背景音" }) {
+                    Text("${settings.backgroundAudio.sound.label} · ${(settings.backgroundAudio.volume * 100).roundToLong()}%   选择与音量 ›")
+                }
+            }
+            Switch(settings.backgroundAudio.enabled, { onBackgroundAudioChanged(settings.backgroundAudio.copy(enabled = it)) },
+                modifier = Modifier.semantics { contentDescription = "启用背景音" })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("音乐锁屏", style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = onOpenMusicLockScreen, contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.semantics { contentDescription = "音乐锁屏设置" }) {
+                    Text("黑胶与时钟   预览与权限 ›")
+                }
+            }
+            Switch(settings.musicLockScreen, { if (it) onOpenMusicLockScreen() else onMusicLockScreenChanged(false) },
+                modifier = Modifier.semantics { contentDescription = "音乐锁屏开关" })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("允许移动网络在线播放", style = MaterialTheme.typography.titleSmall)
+                Text("默认关闭。未缓存的音频会停止播放；已缓存音频始终优先从本机读取。", style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+            }
+            Switch(checked = settings.allowMobileStreaming, onCheckedChange = onAllowMobileStreamingChanged)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
     }
 }
 
@@ -908,71 +1202,163 @@ private fun QueueSheet(
     playback: PlannedPlayback?,
     activeIndex: Int,
     currentOrder: CollectionPlaybackOrder,
+    cache: AudioCacheSnapshot,
+    isSortingOrder: Boolean,
+    onRetryCache: () -> Unit,
     onDismiss: () -> Unit,
     onPlayQueueIndex: (Int) -> Unit,
     onCollectionPlaybackOrderChanged: (CollectionPlaybackOrder) -> Unit,
+    manualItems: List<QueueItem>,
+    onSaveManualOrder: (List<ContentKey>) -> Unit,
 ) {
     if (!visible || playback == null) return
     var showOrderOptions by rememberSaveable { mutableStateOf(false) }
+    var editingOrder by rememberSaveable { mutableStateOf(false) }
+    val specialPlaylist = playback.queue.collectionId == SpecialFavorites.ID
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = activeIndex)
+    val scope = rememberCoroutineScope()
+    val showLocate by remember(listState, activeIndex) {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            layout.totalItemsCount > 0 && layout.visibleItemsInfo.none {
+                it.index == activeIndex && it.offset + it.size > layout.viewportStartOffset && it.offset < layout.viewportEndOffset
+            }
+        }
+    }
+    LaunchedEffect(currentOrder) { listState.scrollToItem(activeIndex) }
 
-    ModalBottomSheet(
+    StableBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1B120F),
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetMaxWidth = if (isLandscapeWindow()) 1000.dp else BottomSheetDefaults.SheetMaxWidth,
+        modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+        containerColor = PanelColor,
         contentColor = PrimaryTextColor,
         dragHandle = { BottomSheetDefaults.DragHandle(color = MaterialTheme.colorScheme.outline) },
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Text(playback.queue.collectionTitle ?: "当前合集", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = PrimaryTextColor)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("共 ${playback.queue.items.size} 条", style = MaterialTheme.typography.bodyMedium, color = SecondaryTextColor)
-                Surface(
-                    modifier = Modifier.clickable { showOrderOptions = !showOrderOptions },
-                    shape = RoundedCornerShape(16.dp),
-                    color = SoftPanelColor,
-                ) {
-                    Text(
-                        text = queueOrderLabel(currentOrder),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = PrimaryTextColor,
-                    )
-                }
-            }
-            if (showOrderOptions) {
+        BackHandler(enabled = editingOrder) { editingOrder = false }
+        if (editingOrder) {
+            SpecialFavoritesOrderEditor(
+                initialItems = manualItems,
+                currentKey = playback.queue.items.getOrNull(activeIndex)?.key,
+                onCancel = { editingOrder = false },
+                onSave = { keys ->
+                    onSaveManualOrder(keys)
+                    editingOrder = false
+                    scope.launch { listState.scrollToItem(0) }
+                },
+            )
+        } else {
+            AdaptiveSheetBody(header = {
+                Text(playback.queue.collectionTitle ?: "当前合集", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = PrimaryTextColor)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    SelectPill(
-                        modifier = Modifier.weight(1f),
-                        selected = currentOrder == CollectionPlaybackOrder.COLLECTION_DEFAULT,
-                        onClick = { onCollectionPlaybackOrderChanged(CollectionPlaybackOrder.COLLECTION_DEFAULT) },
-                        text = "合集顺序",
-                    )
-                    SelectPill(
-                        modifier = Modifier.weight(1f),
-                        selected = currentOrder == CollectionPlaybackOrder.PUBLISHED_ASC,
-                        onClick = { onCollectionPlaybackOrderChanged(CollectionPlaybackOrder.PUBLISHED_ASC) },
-                        text = "时间正序",
-                    )
-                    SelectPill(
-                        modifier = Modifier.weight(1f),
-                        selected = currentOrder == CollectionPlaybackOrder.PUBLISHED_DESC,
-                        onClick = { onCollectionPlaybackOrderChanged(CollectionPlaybackOrder.PUBLISHED_DESC) },
-                        text = "时间倒序",
-                    )
+                    Text("共 ${playback.queue.items.size} 条", style = MaterialTheme.typography.bodyMedium, color = SecondaryTextColor)
+                    Surface(
+                        modifier = Modifier.testTag("queue_order_toggle")
+                            .semantics {
+                                contentDescription = if (showOrderOptions) "收起顺序选项" else "展开顺序选项"
+                                stateDescription = queueOrderLabel(currentOrder.forCollection(playback.queue.collectionId))
+                            }
+                            .clickable(role = Role.Button) { showOrderOptions = !showOrderOptions },
+                        shape = RoundedCornerShape(16.dp),
+                        color = SoftPanelColor,
+                    ) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(queueOrderLabel(currentOrder.forCollection(playback.queue.collectionId)),
+                                style = MaterialTheme.typography.labelLarge, color = PrimaryTextColor)
+                            Icon(Icons.Rounded.ArrowDropDown, null, Modifier.size(18.dp)
+                                .graphicsLayer { rotationZ = if (showOrderOptions) 180f else 0f }, tint = SecondaryTextColor)
+                        }
+                    }
                 }
-            }
-            LazyColumn(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                itemsIndexed(playback.queue.items) { index, item ->
-                    QueueSheetRow(item = item, index = index, isCurrent = index == activeIndex, onClick = { onPlayQueueIndex(index) })
+                if (showOrderOptions) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().testTag("queue_order_options"),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (specialPlaylist) {
+                            listOf(CollectionPlaybackOrder.FAVORITED_ASC, CollectionPlaybackOrder.FAVORITED_DESC, CollectionPlaybackOrder.MANUAL).forEach { order ->
+                                SelectPill(
+                                    modifier = Modifier.weight(1f).testTag("special_order_${order.name.lowercase()}"),
+                                    selected = currentOrder.forCollection(SpecialFavorites.ID) == order,
+                                    onClick = {
+                                        showOrderOptions = false
+                                        if (order == CollectionPlaybackOrder.MANUAL) editingOrder = true
+                                        else onCollectionPlaybackOrderChanged(order)
+                                    },
+                                    text = queueOrderLabel(order),
+                                    compact = true,
+                                )
+                            }
+                        } else {
+                            SelectPill(
+                                modifier = Modifier.weight(1f),
+                                selected = currentOrder == CollectionPlaybackOrder.COLLECTION_DEFAULT,
+                                onClick = { showOrderOptions = false; onCollectionPlaybackOrderChanged(CollectionPlaybackOrder.COLLECTION_DEFAULT) },
+                                text = "合集顺序",
+                            )
+                            SelectPill(
+                                modifier = Modifier.weight(1f),
+                                selected = currentOrder == CollectionPlaybackOrder.PUBLISHED_ASC,
+                                onClick = { showOrderOptions = false; onCollectionPlaybackOrderChanged(CollectionPlaybackOrder.PUBLISHED_ASC) },
+                                text = "时间正序",
+                            )
+                            SelectPill(
+                                modifier = Modifier.weight(1f),
+                                selected = currentOrder == CollectionPlaybackOrder.PUBLISHED_DESC,
+                                onClick = { showOrderOptions = false; onCollectionPlaybackOrderChanged(CollectionPlaybackOrder.PUBLISHED_DESC) },
+                                text = "时间倒序",
+                            )
+                        }
+                    }
+                }
+                Surface(shape = RoundedCornerShape(16.dp), color = SoftPanelColor) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("已缓存 ${cache.cachedCount} 条 · ${formatBytes(cache.cachedBytes)}", style = MaterialTheme.typography.labelLarge, color = AccentColor)
+                                Text(if (cache.autoCacheEnabled) "当前及后续 ${maxOf(cache.targetCount - 1, 0)} 条：${cache.readyTargetCount}/${cache.targetCount} 已就绪"
+                                    else "收藏合集后开启自动缓存", style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+                            }
+                            TextButton(onClick = onRetryCache, enabled = cache.wifiAvailable && cache.autoCacheEnabled) { Text("重试缓存") }
+                        }
+                    }
+                }
+                if (isSortingOrder) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text("正在补齐发布时间…", style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+                } else if (currentOrder.usesPublicationTime && !specialPlaylist && playback.queue.items.any { it.publishedAtMs == 0L }) {
+                    Text("部分发布时间缺失，列在末尾；连接 Wi-Fi 后可重新选择排序。", style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+                } else if (playback.queue.collectionId?.startsWith("video:") == true) {
+                    Text("分 P 共用发布时间，时间倒序按分 P 倒序播放。", style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor)
+                }
+            }) {
+                Box(Modifier.fillMaxSize()) {
+                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize().testTag("playback_queue"),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        itemsIndexed(playback.queue.items, key = { _, item -> item.key.asStoreKey() }) { index, item ->
+                            Box(Modifier.testTag("queue_item_$index")) {
+                                QueueSheetRow(item = item, index = index, isCurrent = index == activeIndex, cacheEntry = cache.entries[item.key.asStoreKey()], onClick = { onPlayQueueIndex(index) })
+                            }
+                        }
+                    }
+                    if (showLocate) {
+                        Box(Modifier.align(Alignment.BottomEnd).padding(4.dp).size(48.dp)
+                            .semantics { contentDescription = "定位当前播放" }
+                            .clickable(role = Role.Button) { scope.launch { listState.animateScrollToItem(activeIndex, 0) } },
+                            contentAlignment = Alignment.Center) {
+                            Surface(Modifier.size(36.dp), shape = CircleShape, color = AccentColor, shadowElevation = 4.dp) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Rounded.MyLocation, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onPrimary)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -987,6 +1373,9 @@ private fun AuthorRow(
     isFavorited: Boolean,
     onOpenCreatorCollections: () -> Unit,
     onToggleFavorite: () -> Unit,
+    isSpecialFavorited: Boolean,
+    onToggleSpecialFavorite: () -> Unit,
+    isSpecialPlaylist: Boolean,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -994,13 +1383,13 @@ private fun AuthorRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (authorAvatarUrl != null) {
-            AsyncImage(
+            CachedArtwork(
                 model = authorAvatarUrl,
                 contentDescription = authorName ?: "UP 主头像",
                 modifier = Modifier
                     .size(38.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF3B2A23))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
                     .clickable(enabled = canOpenCreatorCollections, onClick = onOpenCreatorCollections),
                 contentScale = ContentScale.Crop,
             )
@@ -1009,7 +1398,7 @@ private fun AuthorRow(
                 modifier = Modifier
                     .size(38.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF3B2A23))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
                     .clickable(enabled = canOpenCreatorCollections, onClick = onOpenCreatorCollections),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1025,17 +1414,26 @@ private fun AuthorRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        IconToggleButton(
+            checked = isSpecialFavorited,
+            onCheckedChange = { onToggleSpecialFavorite() },
+            modifier = Modifier.size(48.dp).semantics { contentDescription = "特别收藏当前音频" },
+        ) {
+            Icon(if (isSpecialFavorited) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                contentDescription = null, modifier = Modifier.size(25.dp),
+                tint = if (isSpecialFavorited) AccentColor else SecondaryTextColor)
+        }
         Surface(
-            modifier = Modifier.clickable(onClick = onToggleFavorite),
+            modifier = Modifier.clickable(enabled = !isSpecialPlaylist, onClick = onToggleFavorite),
             shape = RoundedCornerShape(16.dp),
             color = if (isFavorited) FavoriteActiveBackground else FavoriteInactiveBackground,
         ) {
             Text(
-                text = if (isFavorited) "已收藏" else "加入收藏",
+                text = if (isSpecialPlaylist) SpecialFavorites.TITLE else if (isFavorited) "已收藏" else "加入收藏",
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF120B08),
+                color = if (isFavorited) MaterialTheme.colorScheme.onPrimary else PrimaryTextColor,
             )
         }
     }
@@ -1046,21 +1444,24 @@ private fun SideControlButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = Modifier.size(48.dp).clickable(enabled = enabled, onClick = onClick),
-        color = if (enabled) SoftPanelColor else Color(0x222C1D17),
+        modifier = modifier.size(48.dp).clickable(enabled = enabled, onClick = onClick),
+        color = if (enabled) SoftPanelColor else SoftPanelColor.copy(alpha = .3f),
         shape = CircleShape,
     ) {
-        Box(contentAlignment = Alignment.Center) { Icon(icon, contentDescription = null, tint = PrimaryTextColor) }
+        Box(contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = if (icon == Icons.Rounded.Tune) "播放设置" else "播放队列", tint = PrimaryTextColor)
+        }
     }
 }
 
 @Composable
-private fun TransportButton(enabled: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) {
+private fun TransportButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Surface(
-        modifier = Modifier.size(54.dp).clickable(enabled = enabled, onClick = onClick),
-        color = if (enabled) SoftPanelColor else Color(0x222C1D17),
+        modifier = modifier.size(54.dp).clickable(enabled = enabled, onClick = onClick),
+        color = if (enabled) SoftPanelColor else SoftPanelColor.copy(alpha = .3f),
         shape = CircleShape,
     ) {
         Box(contentAlignment = Alignment.Center) { content() }
@@ -1068,23 +1469,18 @@ private fun TransportButton(enabled: Boolean, onClick: () -> Unit, content: @Com
 }
 
 @Composable
-private fun CenteredControlSlot(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Box(modifier = modifier, contentAlignment = Alignment.Center) { content() }
-}
-
-@Composable
-private fun SelectPill(modifier: Modifier = Modifier, selected: Boolean, onClick: () -> Unit, text: String) {
+private fun SelectPill(modifier: Modifier = Modifier, selected: Boolean, onClick: () -> Unit, text: String, compact: Boolean = false) {
     Surface(
         modifier = modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
-        color = if (selected) Color(0xFFE0C7B2) else Color(0x332B1D17),
+        color = if (selected) AccentColor else SoftPanelColor,
         tonalElevation = if (selected) 6.dp else 0.dp,
     ) {
         Text(
             text = text,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
-            style = MaterialTheme.typography.labelLarge,
-            color = if (selected) Color(0xFF24140B) else PrimaryTextColor,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = if (compact) 4.dp else 8.dp, vertical = 12.dp),
+            style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary else PrimaryTextColor,
             textAlign = TextAlign.Center,
             maxLines = 1,
         )
@@ -1092,26 +1488,36 @@ private fun SelectPill(modifier: Modifier = Modifier, selected: Boolean, onClick
 }
 
 @Composable
-private fun QueueSheetRow(item: QueueItem, index: Int, isCurrent: Boolean, onClick: () -> Unit) {
+private fun QueueSheetRow(item: QueueItem, index: Int, isCurrent: Boolean, cacheEntry: AudioCacheEntry?, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(22.dp),
-        color = if (isCurrent) Color(0x4DE0C7B2) else Color(0x332B1D17),
+        color = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else SoftPanelColor,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Box(modifier = Modifier.size(44.dp).background(Color(0x402E2019), RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.size(44.dp).background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
                 Text((index + 1).toString(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = PrimaryTextColor)
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(item.title, style = MaterialTheme.typography.bodyLarge, color = PrimaryTextColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(listOfNotNull(item.authorName, formatTime(item.durationMs)).joinToString(" / "), style = MaterialTheme.typography.bodySmall, color = SecondaryTextColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (item.publishedAtMs > 0) Text(formatPublishDate(item.publishedAtMs), style = MaterialTheme.typography.labelSmall, color = SecondaryTextColor)
+                Text(cacheEntryLabel(cacheEntry), style = MaterialTheme.typography.labelMedium,
+                    color = when (cacheEntry?.phase) {
+                        CachePhase.CACHED -> AccentColor
+                        CachePhase.FAILED -> MaterialTheme.colorScheme.error
+                        else -> SecondaryTextColor
+                    })
+                if (cacheEntry?.phase == CachePhase.DOWNLOADING && cacheEntry.totalBytes > 0) {
+                    LinearProgressIndicator(progress = { (cacheEntry.bytes.toFloat() / cacheEntry.totalBytes).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                }
             }
             if (isCurrent) {
-                Text("正在播放", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = Color(0xFFFFE5CE))
+                Text("当前", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = AccentColor)
             }
         }
     }
@@ -1137,14 +1543,14 @@ private fun QuickSeekButton(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer(scaleX = if (mirrored) -1f else 1f),
-            tint = if (enabled) PrimaryTextColor else Color(0x66F7F2ED),
+            tint = if (enabled) PrimaryTextColor else PrimaryTextColor.copy(alpha = .4f),
         )
         Text(
             text = "15",
             modifier = Modifier.offset(y = 1.dp),
             style = MaterialTheme.typography.labelSmall.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.88f),
             fontWeight = FontWeight.Bold,
-            color = if (enabled) PrimaryTextColor else Color(0x66F7F2ED),
+            color = if (enabled) PrimaryTextColor else PrimaryTextColor.copy(alpha = .4f),
         )
     }
 }
@@ -1180,6 +1586,9 @@ private fun queueOrderLabel(order: CollectionPlaybackOrder): String = when (orde
     CollectionPlaybackOrder.COLLECTION_DEFAULT -> "合集顺序"
     CollectionPlaybackOrder.PUBLISHED_ASC -> "时间正序"
     CollectionPlaybackOrder.PUBLISHED_DESC -> "时间倒序"
+    CollectionPlaybackOrder.FAVORITED_ASC -> "收藏时间正序"
+    CollectionPlaybackOrder.FAVORITED_DESC -> "收藏时间倒序"
+    CollectionPlaybackOrder.MANUAL -> "手动排序"
 }
 
 private fun formatViewCount(viewCount: Long): String {
@@ -1194,4 +1603,31 @@ private fun formatPublishDate(publishTimeMs: Long): String {
     if (publishTimeMs <= 0L) return "未知日期"
     val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
     return formatter.format(Date(publishTimeMs))
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L -> String.format(Locale.getDefault(), "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+    bytes >= 1024L * 1024L -> String.format(Locale.getDefault(), "%.1f MB", bytes / (1024.0 * 1024.0))
+    else -> "${bytes / 1024} KB"
+}
+
+private fun cacheEntryLabel(entry: AudioCacheEntry?): String = when (entry?.phase) {
+    CachePhase.CACHED -> "已缓存 · ${formatBytes(entry.bytes)}"
+    CachePhase.DOWNLOADING -> if (entry.totalBytes > 0) "正在缓存 · ${entry.bytes * 100 / entry.totalBytes}%" else "正在缓存 · ${formatBytes(entry.bytes)}"
+    CachePhase.QUEUED -> "等待缓存"
+    CachePhase.WAITING_WIFI -> "等待 Wi-Fi 缓存"
+    CachePhase.FAILED -> "缓存失败 · ${entry.error ?: "请重试"}"
+    else -> "未缓存"
+}
+
+@Composable
+internal fun CachedArtwork(model: Any?, contentDescription: String?, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Fit) {
+    val context = LocalContext.current
+    val wifi = AppGraph.repository(context).isWifiConnected()
+    val request = remember(model, wifi) {
+        ImageRequest.Builder(context).data(model)
+            .networkCachePolicy(if (wifi) CachePolicy.ENABLED else CachePolicy.DISABLED)
+            .build()
+    }
+    AsyncImage(model = request, contentDescription = contentDescription, modifier = modifier, contentScale = contentScale)
 }

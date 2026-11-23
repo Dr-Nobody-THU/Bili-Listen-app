@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='utf-8'?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/widget_content" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="10dp" android:background="@drawable/widget_background">
+    <LinearLayout android:id="@+id/widget_header" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal" android:baselineAligned="false">
+        <ImageView android:id="@+id/widget_cover" android:layout_width="24dp" android:layout_height="24dp" android:src="@drawable/widget_record" android:background="@drawable/widget_cover_background" android:scaleType="centerCrop" android:contentDescription="@string/widget_cover" />
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginStart="7dp">
+            <TextView android:id="@+id/widget_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/app_name" android:textColor="#82DDC3" android:textSize="11sp" android:maxLines="1" android:ellipsize="end" />
+        </LinearLayout>
+    </LinearLayout>
+    <TextView android:id="@+id/widget_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/widget_empty_title" android:textColor="#EAF0F2" android:textSize="14sp" android:textStyle="bold" android:maxLines="2" android:ellipsize="end" />
+    <TextView android:id="@+id/widget_subtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:text="@string/widget_empty_subtitle" android:textColor="#A8BBBF" android:textSize="11sp" android:maxLines="1" android:ellipsize="end" />
+    <ProgressBar android:id="@+id/widget_progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="3dp" android:layout_marginTop="5dp" android:progressDrawable="@drawable/widget_progress" android:max="1000" android:progress="0" android:indeterminate="false" />
+    <TextView android:id="@+id/widget_time" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:text="@string/widget_empty_time" android:textColor="#A8BBBF" android:textSize="11sp" android:gravity="center" android:maxLines="1" />
+    <include layout="@layout/widget_controls" />
+</LinearLayout>

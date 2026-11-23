@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="48dp" android:gravity="center" android:orientation="horizontal" android:baselineAligned="false">
+    <ImageButton android:id="@+id/widget_previous" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:background="@android:color/transparent" android:src="@drawable/ic_widget_previous" android:padding="12dp" android:scaleType="fitCenter" android:contentDescription="@string/widget_previous" />
+    <FrameLayout android:layout_width="48dp" android:layout_height="48dp" android:padding="3dp">
+        <ImageButton android:id="@+id/widget_toggle" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/ic_widget_play" android:background="@drawable/widget_play_background" android:padding="9dp" android:scaleType="fitCenter" android:contentDescription="@string/widget_play" />
+    </FrameLayout>
+    <ImageButton android:id="@+id/widget_next" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:background="@android:color/transparent" android:src="@drawable/ic_widget_next" android:padding="12dp" android:scaleType="fitCenter" android:contentDescription="@string/widget_next" />
+</LinearLayout>

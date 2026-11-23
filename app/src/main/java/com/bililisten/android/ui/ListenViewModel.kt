@@ -16,15 +16,20 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.bililisten.android.data.AppGraph
+import com.bililisten.android.data.AudioCacheSnapshot
+import com.bililisten.android.data.BackgroundAudioSettings
 import com.bililisten.android.data.CollectionPlaybackOrder
+import com.bililisten.android.data.ContentKey
 import com.bililisten.android.data.CreatorCollectionSummary
 import com.bililisten.android.data.DebugSnapshot
 import com.bililisten.android.data.FavoriteCollection
 import com.bililisten.android.data.PlayMode
 import com.bililisten.android.data.PlannedPlayback
 import com.bililisten.android.data.PlayerSettings
+import com.bililisten.android.data.QueueItem
 import com.bililisten.android.data.ResumePolicy
 import com.bililisten.android.data.StartPlan
+import com.bililisten.android.data.SpecialFavorites
 import com.bililisten.android.player.AudioPlaybackService
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.ExecutorService
@@ -39,6 +44,7 @@ data class PlaybackControlState(
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
     val hasActiveItem: Boolean = false,
+    val localAudio: Boolean? = null,
 )
 
 data class ListenUiState(
@@ -56,8 +62,15 @@ data class ListenUiState(
     val debugSnapshot: DebugSnapshot? = null,
     val playbackControl: PlaybackControlState = PlaybackControlState(),
     val playerSettings: PlayerSettings = PlayerSettings(),
+    val cacheSnapshot: AudioCacheSnapshot = AudioCacheSnapshot(),
+    val playbackError: String? = null,
+    val isSortingOrder: Boolean = false,
+    val totalListeningTimeMs: Long = 0L,
+    val isCurrentSpecialFavorite: Boolean = false,
+    val specialFavoriteManualItems: List<QueueItem> = emptyList(),
 )
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class ListenViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
@@ -65,10 +78,49 @@ class ListenViewModel(
     private val logger = AppGraph.logger(application)
     private val playerSettingsStore = AppGraph.playerSettings(application)
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val cacheStatusExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var mediaController: MediaController? = null
     private var autoRestoreGeneration = 0L
+    private var orderGeneration = 0L
+    private var cacheStatusPending = false
+    private var appStarted = false
+
+    fun onAppStarted() {
+        if (appStarted) return
+        appStarted = true
+        cacheStatusExecutor.execute {
+            runCatching { repository.cleanupExpiredAudioCache() }
+                .onFailure { logger.error("AudioCache", "启动时清理过期缓存失败", it) }
+        }
+    }
+
+    fun onAppStopped(changingConfigurations: Boolean) {
+        if (!changingConfigurations) appStarted = false
+    }
+
+    private val cacheTicker = object : Runnable {
+        override fun run() {
+            uiState = uiState.copy(favorites = uiState.favorites.map {
+                it.copy(listeningTimeMs = repository.listeningTimeMs(it.id))
+            }, totalListeningTimeMs = repository.totalListeningTimeMs())
+            val playback = uiState.plannedPlayback?.let(::snapshotCurrentPlayback)
+            if (playback != null && !cacheStatusPending) {
+                cacheStatusPending = true
+                cacheStatusExecutor.execute {
+                    val snapshot = repository.cacheSnapshot(playback)
+                    mainHandler.post {
+                        cacheStatusPending = false
+                        if (uiState.plannedPlayback?.queue == playback.queue) {
+                            uiState = uiState.copy(cacheSnapshot = snapshot)
+                        }
+                    }
+                }
+            }
+            mainHandler.postDelayed(this, 1_500L)
+        }
+    }
 
     private val controllerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -96,6 +148,7 @@ class ListenViewModel(
         connectController()
         restoreLastPlaybackIfAvailable()
         mainHandler.post(progressTicker)
+        mainHandler.post(cacheTicker)
     }
 
     fun setInput(value: String) {
@@ -118,11 +171,10 @@ class ListenViewModel(
 
     fun togglePlayPause() {
         val controller = mediaController
-        if (controller == null || controller.currentMediaItem == null) {
+        if (controller == null || controller.currentMediaItem == null || controller.playbackState == Player.STATE_IDLE) {
             val playback = uiState.plannedPlayback ?: return
             val snapshot = snapshotCurrentPlayback(playback)
             logger.info("ListenViewModel", "Play requested from prepared playback.")
-            repository.clearCollectionProgress(snapshot.queue, keepKey = snapshot.plan.item.key)
             startPreparedPlayback(snapshot)
             uiState = uiState.copy(
                 plannedPlayback = snapshot,
@@ -131,7 +183,7 @@ class ListenViewModel(
             refreshFavorites(snapshot)
             return
         }
-        if (controller.isPlaying) {
+        if (controller.playWhenReady) {
             logger.info("ListenViewModel", "Pause requested from UI.")
             controller.pause()
         } else {
@@ -173,19 +225,21 @@ class ListenViewModel(
     }
 
     fun skipNext() {
-        val playback = uiState.plannedPlayback ?: return
-        val currentIndex = resolveCurrentQueueIndex(playback)
-        val nextIndex = repository.nextIndex(playback.queue, currentIndex)
-        logger.info("ListenViewModel", "Skip-next requested from UI. $currentIndex -> $nextIndex")
-        playQueueIndex(nextIndex, reason = "next item")
+        skip(1)
     }
 
     fun skipPrevious() {
-        val playback = uiState.plannedPlayback ?: return
-        val currentIndex = resolveCurrentQueueIndex(playback)
-        val previousIndex = repository.previousIndex(playback.queue, currentIndex)
-        logger.info("ListenViewModel", "Skip-previous requested from UI. $currentIndex -> $previousIndex")
-        playQueueIndex(previousIndex, reason = "previous item")
+        skip(-1)
+    }
+
+    private fun skip(delta: Int) {
+        val playback = uiState.plannedPlayback?.let(::snapshotCurrentPlayback) ?: return
+        saveCurrentPosition()
+        val next = repository.adjacentPlayback(playback, delta) ?: return
+        invalidatePendingRestore()
+        startPreparedPlayback(next)
+        uiState = uiState.copy(plannedPlayback = next, message = "已切换播放项", playbackControl = previewPlaybackControl(next))
+        refreshFavorites(next)
     }
 
     fun playQueueIndex(index: Int, reason: String = "manual selection") {
@@ -194,22 +248,17 @@ class ListenViewModel(
         val currentIndex = resolveCurrentQueueIndex(playback)
         if (index == currentIndex && mediaController?.currentMediaItem != null) {
             logger.info("ListenViewModel", "Queue item $index is already active; ignoring selection.")
-            uiState = uiState.copy(message = "当前已在播放该视频")
+            uiState = uiState.copy(message = "当前已在播放该节目")
             return
         }
 
-        val resumeSavedProgress = index == currentIndex
+        saveCurrentPosition()
         val nextPlayback = repository.planPlaybackFromQueue(
             queue = playback.queue,
             targetIndex = index,
             reason = reason,
-            resumeSavedProgress = resumeSavedProgress,
+            resumeSavedProgress = true,
         )
-        if (resumeSavedProgress) {
-            repository.clearCollectionProgress(nextPlayback.queue, keepKey = nextPlayback.plan.item.key)
-        } else {
-            repository.clearCollectionProgress(nextPlayback.queue)
-        }
         startPreparedPlayback(nextPlayback)
         uiState = uiState.copy(
             plannedPlayback = nextPlayback,
@@ -234,7 +283,52 @@ class ListenViewModel(
         applySettingsToController(updatedSettings)
     }
 
+    fun updateAllowMobileStreaming(allowed: Boolean) {
+        uiState = uiState.copy(playerSettings = playerSettingsStore.saveAllowMobileStreaming(allowed))
+        if (mediaController != null) AudioPlaybackService.updateSettings(getApplication())
+    }
+
+    fun retryCache() {
+        val playback = uiState.plannedPlayback?.let(::snapshotCurrentPlayback) ?: return
+        AudioPlaybackService.retryCache(getApplication(), playback)
+    }
+
+    fun updateFadePlayback(enabled: Boolean) {
+        uiState = uiState.copy(playerSettings = playerSettingsStore.saveFadePlayback(enabled))
+        if (mediaController != null) AudioPlaybackService.updateSettings(getApplication(), recheckNetwork = false)
+    }
+
+    fun updateBackgroundAudio(settings: BackgroundAudioSettings) {
+        uiState = uiState.copy(playerSettings = playerSettingsStore.saveBackgroundAudio(settings))
+        if (mediaController != null) AudioPlaybackService.updateSettings(getApplication(), recheckNetwork = false)
+    }
+
+    fun updateMusicLockScreen(enabled: Boolean) {
+        uiState = uiState.copy(playerSettings = playerSettingsStore.saveMusicLockScreen(enabled))
+    }
+
+    fun updateSkin(skin: com.bililisten.android.data.AppSkin) {
+        uiState = uiState.copy(playerSettings = playerSettingsStore.saveSkin(skin))
+    }
+
+    fun updateRecordCollectionSwitch(enabled: Boolean) {
+        uiState = uiState.copy(playerSettings = playerSettingsStore.saveRecordCollectionSwitch(enabled))
+    }
+
+    fun switchFavoriteFromRecord(favoriteId: String) {
+        // Browsing never reaches here. Confirmation uses the saved queue immediately, just like the widget.
+        val current = uiState.plannedPlayback?.let(::snapshotCurrentPlayback)
+        if (current != null && repository.favoriteIdOf(current) == favoriteId) return
+        val favorite = repository.loadFavorite(favoriteId) ?: run { refreshFavorites(); return }
+        invalidatePendingRestore()
+        startPreparedPlayback(favorite.playback)
+        uiState = uiState.copy(plannedPlayback = favorite.playback, message = "已切换到收藏合集", error = null,
+            playbackControl = previewPlaybackControl(favorite.playback))
+        refreshFavorites(favorite.playback)
+    }
+
     fun updateCollectionPlaybackOrder(order: CollectionPlaybackOrder) {
+        val generation = ++orderGeneration
         val playback = uiState.plannedPlayback ?: return
         val snapshot = snapshotCurrentPlayback(playback)
         logger.info("ListenViewModel", "Collection playback order changed to $order.")
@@ -256,6 +350,41 @@ class ListenViewModel(
             AudioPlaybackService.updatePlaybackContext(getApplication(), updatedPlayback)
         }
         refreshFavorites(updatedPlayback)
+        val needsDates = order.usesPublicationTime &&
+            updatedPlayback.queue.items.any { it.publishedAtMs == 0L }
+        if (!needsDates || !repository.isWifiConnected()) {
+            uiState = uiState.copy(isSortingOrder = false)
+            return
+        }
+        uiState = uiState.copy(isSortingOrder = true)
+        executor.execute {
+            val enriched = runCatching { repository.fillMissingPublicationTimes(updatedPlayback) }
+                .onFailure { logger.error("ListenViewModel", "Cannot load publication dates.", it) }
+                .getOrDefault(updatedPlayback)
+            mainHandler.post {
+                if (generation != orderGeneration || uiState.plannedPlayback?.queue?.collectionId != enriched.queue.collectionId) return@post
+                val current = uiState.plannedPlayback?.let(::snapshotCurrentPlayback) ?: return@post
+                val index = enriched.queue.items.indexOfFirst { it.key == current.plan.item.key }
+                if (index < 0) {
+                    uiState = uiState.copy(isSortingOrder = false)
+                    return@post
+                }
+                val anchored = enriched.copy(plan = current.plan.copy(startIndex = index, item = enriched.queue.items[index]))
+                val sorted = repository.updateCollectionPlaybackOrder(anchored, order, current.plan.startPositionMs)
+                uiState = uiState.copy(plannedPlayback = sorted, isSortingOrder = false)
+                if (mediaController?.currentMediaItem != null) AudioPlaybackService.updatePlaybackContext(getApplication(), sorted)
+                refreshFavorites(sorted)
+            }
+        }
+    }
+
+    fun saveSpecialFavoriteOrder(keys: List<ContentKey>) {
+        repository.saveSpecialFavoriteOrder(keys)
+        if (uiState.plannedPlayback?.queue?.collectionId == SpecialFavorites.ID) {
+            updateCollectionPlaybackOrder(CollectionPlaybackOrder.MANUAL)
+        } else {
+            refreshFavorites()
+        }
     }
 
     fun startPlayback(policy: ResumePolicy) {
@@ -263,7 +392,7 @@ class ListenViewModel(
         val input = uiState.input.trim()
         if (input.isEmpty()) {
             logger.error("ListenViewModel", "User attempted to start playback without input.")
-            uiState = uiState.copy(error = "请先输入 BV 号或 B 站链接。", message = null)
+            uiState = uiState.copy(error = "请先输入 BV / AU 号或 B 站链接。", message = null)
             return
         }
 
@@ -272,7 +401,6 @@ class ListenViewModel(
             try {
                 logger.info("ListenViewModel", "Planning playback with policy=$policy for ${input.take(120)}")
                 val playback = repository.planPlayback(input, policy)
-                repository.clearCollectionProgress(playback.queue)
                 mainHandler.post {
                     startPreparedPlayback(playback)
                     uiState = uiState.copy(
@@ -310,10 +438,34 @@ class ListenViewModel(
             error = null,
         )
         refreshFavorites(snapshot)
+        AudioPlaybackService.retryCache(getApplication(), snapshot)
+    }
+
+    fun toggleCurrentSpecialFavorite() {
+        val playback = uiState.plannedPlayback?.let(::snapshotCurrentPlayback) ?: return
+        invalidatePendingRestore()
+        val added = repository.toggleSpecialFavorite(playback)
+        uiState = uiState.copy(error = null, message = when {
+            added -> "已将当前音频加入特别收藏"
+            playback.queue.collectionId == SpecialFavorites.ID -> "已移出特别收藏，当前音频继续播放"
+            else -> "已移出特别收藏"
+        })
+        refreshSpecialFavoriteContext()
+        AudioPlaybackService.retryCache(getApplication(), repository.normalizePlaybackOrder(playback))
+    }
+
+    private fun refreshSpecialFavoriteContext() {
+        uiState.plannedPlayback?.takeIf { it.queue.collectionId == SpecialFavorites.ID }?.let {
+            val updated = repository.normalizePlaybackOrder(snapshotCurrentPlayback(it))
+            uiState = uiState.copy(plannedPlayback = updated)
+            if (mediaController?.currentMediaItem != null) AudioPlaybackService.updatePlaybackContext(getApplication(), updated)
+        }
+        refreshFavorites()
     }
 
     fun openFavorite(favoriteId: String) {
         invalidatePendingRestore()
+        val generation = autoRestoreGeneration
         val favorite = repository.loadFavorite(favoriteId) ?: run {
             uiState = uiState.copy(message = null, error = "找不到这个收藏。")
             refreshFavorites()
@@ -324,6 +476,7 @@ class ListenViewModel(
                 .onFailure { logger.error("ListenViewModel", "Failed to refresh favorite snapshot before opening.", it) }
                 .getOrDefault(favorite.playback)
             mainHandler.post {
+                if (generation != autoRestoreGeneration) return@post
                 logger.info("ListenViewModel", "Opening favorite playback: $favoriteId")
                 startPreparedPlayback(playback)
                 uiState = uiState.copy(
@@ -394,7 +547,6 @@ class ListenViewModel(
                     "Opening creator collection ${summary.id} with leadBvid=${summary.leadBvid ?: "none"}",
                 )
                 val playback = repository.planPlaybackFromCreatorCollection(summary)
-                repository.clearCollectionProgress(playback.queue)
                 mainHandler.post {
                     startPreparedPlayback(playback)
                     uiState = uiState.copy(
@@ -473,9 +625,19 @@ class ListenViewModel(
     }
 
     private fun startPreparedPlayback(playback: PlannedPlayback) {
+        saveCurrentPosition()
+        repository.playbackError = null
         repository.rememberSession(playback)
         repository.saveLastPlayback(playback)
         AudioPlaybackService.start(getApplication(), playback)
+    }
+
+    private fun saveCurrentPosition() {
+        val controller = mediaController ?: return
+        val active = repository.activePlayback ?: return
+        if (controller.currentMediaItem?.mediaId == active.plan.item.key.asStoreKey()) {
+            repository.saveProgress(active, controller.currentPosition.coerceAtLeast(0L))
+        }
     }
 
     private fun invalidatePendingRestore() {
@@ -495,6 +657,7 @@ class ListenViewModel(
     }
 
     private fun publishPlaybackControlState() {
+        uiState = uiState.copy(playbackError = repository.playbackError)
         val controller = mediaController
         val preparedPlayback = uiState.plannedPlayback
         if (controller == null) {
@@ -503,12 +666,24 @@ class ListenViewModel(
         }
 
         if (controller.currentMediaItem == null) {
-            uiState = uiState.copy(playbackControl = buildPreparedPlaybackControl(preparedPlayback, connected = true))
+            val pending = repository.activePlayback ?: preparedPlayback
+            uiState = uiState.copy(
+                plannedPlayback = pending,
+                playbackControl = buildPreparedPlaybackControl(pending, connected = true)
+                    .copy(isBuffering = repository.playbackLoading),
+            )
+            if (pending?.plan?.item?.key != preparedPlayback?.plan?.item?.key || pending?.queue != preparedPlayback?.queue) refreshFavorites(pending)
             return
         }
 
         val durationMs = controller.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
+        val activePlayback = repository.activePlayback?.takeIf {
+            it.plan.item.key.asStoreKey() == controller.currentMediaItem?.mediaId &&
+                (it.plan.item.key != preparedPlayback?.plan?.item?.key ||
+                    it.queue != preparedPlayback.queue)
+        }?.let(repository::normalizePlaybackOrder)
         uiState = uiState.copy(
+            plannedPlayback = activePlayback ?: preparedPlayback,
             playbackControl = PlaybackControlState(
                 connected = true,
                 mediaId = controller.currentMediaItem?.mediaId,
@@ -518,8 +693,11 @@ class ListenViewModel(
                 isPlaying = controller.isPlaying,
                 isBuffering = controller.playbackState == Player.STATE_BUFFERING,
                 hasActiveItem = controller.currentMediaItem != null,
+                localAudio = controller.mediaMetadata.extras?.takeIf { it.containsKey(AudioPlaybackService.EXTRA_LOCAL_AUDIO) }
+                    ?.getBoolean(AudioPlaybackService.EXTRA_LOCAL_AUDIO),
             ),
         )
+        if (activePlayback != null) refreshFavorites(activePlayback)
     }
 
     private fun previewPlaybackControl(playback: PlannedPlayback): PlaybackControlState {
@@ -530,6 +708,9 @@ class ListenViewModel(
             positionMs = playback.plan.startPositionMs,
             durationMs = playback.plan.item.durationMs,
             hasActiveItem = true,
+            localAudio = uiState.playbackControl.localAudio.takeIf {
+                uiState.playbackControl.mediaId == playback.plan.item.key.asStoreKey()
+            },
         )
     }
 
@@ -588,15 +769,19 @@ class ListenViewModel(
             favorites = favorites,
             currentFavoriteId = currentFavoriteId,
             currentCollectionPlaybackOrder = currentCollectionPlaybackOrder,
+            totalListeningTimeMs = repository.totalListeningTimeMs(),
+            isCurrentSpecialFavorite = playback?.plan?.item?.key?.let(repository::isSpecialFavorited) == true,
+            specialFavoriteManualItems = repository.specialFavoriteManualItems(),
         )
     }
 
     override fun onCleared() {
-        mainHandler.removeCallbacks(progressTicker)
+        mainHandler.removeCallbacksAndMessages(null)
         mediaController?.removeListener(controllerListener)
         mediaController?.release()
         controllerFuture?.let { MediaController.releaseFuture(it) }
         executor.shutdownNow()
+        cacheStatusExecutor.shutdownNow()
         super.onCleared()
     }
 
